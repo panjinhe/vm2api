@@ -554,16 +554,20 @@ function dumpSessionEnvelope(envelope) {
   } catch {}
 }
 
+// Temporary (dofastted/vm2api#1072): the CRAG 3.0.x isolated provider (auto
+// mode classifier) rejects body.metadata with 400 "unsupported isolated provider
+// field". Classifier hops run with cragPrint=false, so key on the slot's kernel,
+// not the print decision. Identity rewrite always stamps metadata.user_id; the
+// main path already drops it. Remove once the kernel accepts the field.
+function dropIsolatedCragMetadata(body, exec, isolated) {
+  if (!isolated || !body || typeof body !== 'object' || !Object.hasOwn(body, 'metadata')) return body
+  if (!nativeCragRequest(exec, null)) return body
+  const { metadata: _metadata, ...rest } = body
+  return rest
+}
+
 function gateCragBody(body, print, health, isolated = false) {
   if (!body || typeof body !== 'object') return body
-  // Temporary (dofastted/vm2api#1072): the CRAG 3.0.x isolated provider (auto
-  // mode classifier) rejects body.metadata with 400 "unsupported isolated
-  // provider field". Identity rewrite always stamps metadata.user_id, so drop it
-  // here, as the main path already does. Remove once the kernel accepts it.
-  if (print && isolated && Object.hasOwn(body, 'metadata')) {
-    const { metadata: _metadata, ...rest } = body
-    body = rest
-  }
   const caps = print && Array.isArray(health?.capabilities) ? health.capabilities : []
   const prompt = body.crag_prompt
   const model = print && !isolated && cragConsumesModelDirective(health) ? modelDirectiveForCrag(body.model) : null
@@ -635,7 +639,8 @@ export function prepareWorkerPayload({
       ? main
       : { ...main, betas }
     : sanitizeAnthropicBodyForBetaTokens(main, headers['anthropic-beta'])
-  const directed = gateCragBody(gated, print, health, requestContext?.purpose === 'auto_mode_classifier')
+  const isolated = requestContext?.purpose === 'auto_mode_classifier'
+  const directed = dropIsolatedCragMetadata(gateCragBody(gated, print, health, isolated), exec, isolated)
   return {
     headers,
     gated: directed,
@@ -731,11 +736,16 @@ async function preparePrebuiltEnvelope(envelope, redaction, messages, exec, crag
   if (messages) {
     delete out.gateway_policy
     const print = nativeCragRequest(exec, cragPrint)
-    out.body = gateCragBody(
-      print ? prepareCragRequest(out.body) : prepareCliNodeRequest(out.body),
-      print,
-      exec?.workerStatus,
-      out.request_context?.purpose === 'auto_mode_classifier',
+    const isolated = out.request_context?.purpose === 'auto_mode_classifier'
+    out.body = dropIsolatedCragMetadata(
+      gateCragBody(
+        print ? prepareCragRequest(out.body) : prepareCliNodeRequest(out.body),
+        print,
+        exec?.workerStatus,
+        isolated,
+      ),
+      exec,
+      isolated,
     )
     if (out.headers && typeof out.headers === 'object') {
       out.headers = Object.fromEntries(
