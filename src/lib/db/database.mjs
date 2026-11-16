@@ -134,6 +134,28 @@ function reconcileCragShopMigrationVersions(db, dir, files) {
   })
 }
 
+// Deploy fork: refusal_session_blocks shipped as 059 before upstream took 059
+// for risk-audit bans. Same SQL, now 060; move only the applied record so the
+// upstream 059 runs and the session table is not recreated.
+function reconcileRefusalSessionMigrationVersion(db, dir, files) {
+  const file = '060_refusal_session_blocks.sql'
+  if (!files.includes(file)) return
+  const get = db.prepare('SELECT name, checksum FROM schema_migrations WHERE version = ?')
+  const row = get.get('059')
+  if (row?.name !== '059_refusal_session_blocks.sql') return
+  if (get.get('060')) throw new Error('unexpected refusal session migration history at 060')
+  const { canonical, variants } = migrationChecksums(fs.readFileSync(path.join(dir, file), 'utf8'))
+  if (!variants.has(row.checksum)) {
+    throw new Error(`migration checksum mismatch for ${row.name}: applied=${row.checksum} current=${canonical}`)
+  }
+  db.prepare('UPDATE schema_migrations SET version = ?, name = ?, checksum = ? WHERE version = ?').run(
+    '060',
+    file,
+    canonical,
+    '059',
+  )
+}
+
 let _db = null
 let _dbPath = null
 let poolWanted = false
@@ -247,6 +269,7 @@ export function applyMigrations(db, { migrationsDir } = {}) {
     : []
 
   reconcileCragShopMigrationVersions(db, dir, files)
+  reconcileRefusalSessionMigrationVersion(db, dir, files)
 
   const appliedRows = db.prepare('SELECT version, checksum FROM schema_migrations').all()
   const applied = new Map(appliedRows.map((r) => [r.version, r.checksum]))
