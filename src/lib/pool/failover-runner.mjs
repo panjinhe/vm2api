@@ -2,6 +2,7 @@ import {
   classifyUpstreamResult,
   isFableModel,
   repairAnthropicRequest,
+  CACHE_NEUTRAL_REPAIRS,
   shouldContinue,
 } from './upstream-error-policy.mjs'
 import { listQuotaFromHeaders } from './quota-window.mjs'
@@ -914,7 +915,9 @@ export class FailoverRunner {
           typeof applyAttempt === 'function'
             ? await applyAttempt(clone(attemptBody), selected, {
                 attemptNo,
-                repaired,
+                // A cache-neutral repair only rewrites the tail; the hop keeps
+                // the first-hop outbound shape so the cached prefix still hits.
+                repaired: repaired && !CACHE_NEUTRAL_REPAIRS.has(repairPolicy?.reason),
                 // Assemblers may rebuild from caller input for each selected
                 // slot. Replay the same repairs on that freshly rendered body.
                 repairs: [
