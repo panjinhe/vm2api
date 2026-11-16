@@ -466,11 +466,17 @@ export function dropNativeBlockCacheAnchors(messages) {
  * Lift each inline definition into top-level `tools` (deferred, the same shape
  * Claude Code uses for its own deferred tools) and point the block at it by
  * name. A tool already declared at top level is not duplicated.
+ * The gateway's eager_input_streaming policy has already run on the declared
+ * tools by now; a lifted tool follows it (when every declared custom tool is
+ * eager), since CRAG does not offer the model a deferred tool without it.
  */
 export function liftInlineToolDefinitions(body) {
   if (!Array.isArray(body?.messages)) return body
   const lifted = []
-  const known = new Set((Array.isArray(body.tools) ? body.tools : []).map((tool) => tool?.name).filter(Boolean))
+  const declared = Array.isArray(body.tools) ? body.tools : []
+  const known = new Set(declared.map((tool) => tool?.name).filter(Boolean))
+  const custom = declared.filter((tool) => tool?.input_schema)
+  const eager = custom.length > 0 && custom.every((tool) => tool.eager_input_streaming === true)
   let changed = false
   const messages = body.messages.map((message) => {
     if (!Array.isArray(message?.content)) return message
@@ -483,7 +489,9 @@ export function liftInlineToolDefinitions(body) {
         const definition = block.tool.definition
         if (!known.has(definition.name)) {
           known.add(definition.name)
-          lifted.push({ ...definition, defer_loading: true })
+          const tool = { ...definition, defer_loading: true }
+          if (eager && typeof definition.eager_input_streaming !== 'boolean') tool.eager_input_streaming = true
+          lifted.push(tool)
         }
         return { ...block, tool: { type: 'tool_reference', name: definition.name } }
       }),
