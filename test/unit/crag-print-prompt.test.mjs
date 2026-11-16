@@ -568,3 +568,15 @@ test('liftInlineToolDefinitions leaves tool_reference additions and declared too
   assert.deepEqual(out.tools, [{ name: 'Artifact' }])
   assert.deepEqual(out.messages[0].content[0].tool, { type: 'tool_reference', name: 'Artifact' })
 })
+
+test('liftInlineToolDefinitions marks a lifted tool eager when the declared custom tools are', () => {
+  const addition = { type: 'tool_addition', tool: { type: 'tool_definition', definition: { name: 'Artifact', input_schema: { type: 'object' } } } }
+  const messages = [{ role: 'system', content: [addition] }]
+  const eager = liftInlineToolDefinitions({ tools: [{ name: 'Read', input_schema: {}, eager_input_streaming: true }], messages })
+  assert.deepEqual(eager.tools[1], { name: 'Artifact', input_schema: { type: 'object' }, defer_loading: true, eager_input_streaming: true })
+  const mixed = liftInlineToolDefinitions({
+    tools: [{ name: 'Read', input_schema: {}, eager_input_streaming: true }, { name: 'Bash', input_schema: {} }],
+    messages,
+  })
+  assert.equal('eager_input_streaming' in mixed.tools[2], false)
+})
