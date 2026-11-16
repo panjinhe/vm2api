@@ -2338,3 +2338,70 @@ test('failed hops are kept for the request log', async () => {
   assert.match(hops[0].body, /rate_limit_error/)
   assert.equal(takeHopErrors('req-hop-log'), null)
 })
+
+test('signature 400 on a hop that replayed foreign thinking is stripped and retried with the switch off', async () => {
+  const scheduler = new Scheduler([candidate(1)])
+  const runner = new FailoverRunner({ scheduler })
+  const seen = []
+  const result = await runner.run({
+    requestId: 'req-foreign-sig',
+    canonicalBody: {
+      model: 'claude-opus-test',
+      thinking: { type: 'adaptive' },
+      messages: [
+        { role: 'user', content: 'q' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: '', signature: 'other-pool-signature' },
+            { type: 'text', text: 'keep' },
+          ],
+        },
+        { role: 'user', content: 'next' },
+      ],
+    },
+    model: 'claude-opus-test',
+    applyAttempt: (body, _selected, extra) => {
+      seen.push(extra.repairs)
+      return { body, meta: { foreignThinking: true } }
+    },
+    callAttempt: ({ body }) => {
+      if (seen.length === 1) {
+        return {
+          ok: false,
+          status: 400,
+          terminalState: 'error',
+          body: { error: { message: 'messages.1.content.0: Invalid `signature` in `thinking` block' } },
+        }
+      }
+      assert.deepEqual(body.messages[1].content, [{ type: 'text', text: 'keep' }])
+      return success('stripped')
+    },
+  })
+  assert.equal(result.ok, true)
+  assert.equal(seen.length, 2)
+  assert.deepEqual(seen[1], [{ action: 'repair-and-retry', reason: 'signature_repairable' }])
+})
+
+test('signature 400 without foreign thinking still surfaces with the switch off', async () => {
+  const scheduler = new Scheduler([candidate(1)])
+  const runner = new FailoverRunner({ scheduler })
+  let calls = 0
+  const result = await runner.run({
+    requestId: 'req-own-sig',
+    canonicalBody: { model: 'claude-opus-test', messages: [{ role: 'user', content: 'q' }] },
+    model: 'claude-opus-test',
+    applyAttempt: (body) => ({ body, meta: { foreignThinking: false } }),
+    callAttempt: () => {
+      calls++
+      return {
+        ok: false,
+        status: 400,
+        terminalState: 'error',
+        body: { error: { message: 'Invalid `signature` in `thinking` block' } },
+      }
+    },
+  })
+  assert.equal(result.status, 400)
+  assert.equal(calls, 1)
+})
