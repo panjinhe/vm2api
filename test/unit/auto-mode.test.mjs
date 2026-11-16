@@ -269,14 +269,14 @@ test('#1072 CRAG isolated classifier drops metadata; main CRAG and cli-node keep
     vm: { claude: { mode: 'setup-token', scope: 'user:inference' } },
     workerStatus: { runtime_variant: 'crag-v2', capabilities: ['generation_controls_v3'] },
   }
-  const isolated = finalizeWorkerPayload({ body, reqHeaders: {}, exec: crag, identity: null, requestContext: context })
+  const isolated = finalizeWorkerPayload({ body, reqHeaders: {}, exec: crag, identity: null, requestContext: context, cliHop: true, cragPrint: false })
   assert.equal(isolated.body.metadata, undefined)
   assert.deepEqual(isolated.body.stop_sequences, body.stop_sequences)
   assert.deepEqual(body.metadata, { user_id: 'u' })
   const cliNode = finalizeWorkerPayload({
     body,
     reqHeaders: {},
-    exec: { ...crag, workerStatus: undefined },
+    exec: { ...crag, workerStatus: { runtime_variant: 'cli-node' } },
     identity: null,
     requestContext: context,
     cliHop: true,
