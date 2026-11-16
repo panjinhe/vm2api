@@ -322,21 +322,20 @@ export function sanitizeRequestBodySnapshot(value, opts = {}, seen = new WeakSet
   return out
 }
 
-function clampBody(obj, maxChars = 200_000) {
+// prod patch 2026-11-14: debug records keep the full body, images included.
+// Only credential-shaped substrings are masked; nothing is truncated.
+function clampBody(obj) {
   let raw
   try {
-    raw = redactSecrets(redactImagePayloads(obj))
+    raw = redactSecrets(obj)
   } catch {
     raw = '{"error":"redact_failed"}'
   }
-  if (raw.length <= maxChars) {
-    try {
-      return JSON.parse(raw)
-    } catch {
-      return { _raw: raw.slice(0, maxChars) }
-    }
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return { _raw: raw }
   }
-  return { _truncated: true, _chars: raw.length, preview: raw.slice(0, maxChars) }
 }
 
 /**
@@ -381,7 +380,7 @@ export class RequestLogStore {
     dataDir,
     db,
     mode = process.env.KIN_REQUEST_LOG_MODE || 'normal',
-    maxDebugBodyChars = Number(process.env.KIN_REQUEST_LOG_DEBUG_CHARS || 200000),
+    maxDebugBodyChars = Number(process.env.KIN_REQUEST_LOG_DEBUG_CHARS || Infinity),
     retainDays = Number(process.env.KIN_REQUEST_LOG_RETAIN_DAYS || DEFAULT_RETAIN_DAYS),
     debugRetainDays = Number(process.env.KIN_REQUEST_LOG_DEBUG_RETAIN_DAYS || DEFAULT_DEBUG_RETAIN_DAYS),
     maxMb = Number(process.env.KIN_REQUEST_LOG_MAX_MB || DEFAULT_MAX_MB),
@@ -392,7 +391,7 @@ export class RequestLogStore {
     this.repo = new UsageLogsRepo(this.db)
     this.root = path.join(this.dataDir, 'request-logs')
     this.mode = MODES.has(String(mode).toLowerCase()) ? String(mode).toLowerCase() : 'normal'
-    this.maxDebugBodyChars = Number.isFinite(maxDebugBodyChars) ? maxDebugBodyChars : 200000
+    this.maxDebugBodyChars = maxDebugBodyChars > 0 ? maxDebugBodyChars : Infinity
     this.retainDays = Number.isFinite(retainDays) && retainDays > 0 ? retainDays : DEFAULT_RETAIN_DAYS
     this.debugRetainDays =
       Number.isFinite(debugRetainDays) && debugRetainDays > 0 ? debugRetainDays : DEFAULT_DEBUG_RETAIN_DAYS
