@@ -1,5 +1,6 @@
 import { normalizeThinkingForModel } from '../protocol/thinking.mjs'
 import { flattenSearchResultHistory, rectifyUnofficialRequestForRetry } from '../protocol/request-rectifier.mjs'
+import { readOnlyTailToolResults } from '../protocol/tool-result-readonly.mjs'
 import {
   assistantStopReason,
   assistantVisibleOutput,
@@ -36,6 +37,19 @@ const PREFILL_PATTERNS = [
 ]
 
 const TOOL_PAIR_PATTERNS = [/tool_use.*tool_result/i, /tool_result.*(?:required|missing|expected)/i, /tool_use_id/i]
+
+// CRAG refused to continue a tool call it no longer holds: the result was
+// already consumed (a client retry after the native process died), the hop's
+// history no longer matches the parked call, or the park expired. The caller
+// cannot fix this by resending, so the conversation would 409/410 forever.
+const TOOL_CONTINUATION_PATTERNS = [
+  /tool_result replayed/i,
+  /tool_result history mismatch/i,
+  /tool continuation expired/i,
+]
+
+/** Repairs that leave the outbound shape (thinking display, cache prefix) untouched. */
+export const CACHE_NEUTRAL_REPAIRS = new Set(['tool_continuation_repairable'])
 
 const SCHEMA_PATTERNS = [/additionalProperties/i, /output_config/i]
 
@@ -421,6 +435,22 @@ function classifyUpstreamResultRaw(
       reason: code || workerCode,
       cooldownUntil: null,
       retrySameAccount: false,
+    }
+  }
+  // Answer the tail as read-only context on the same seat, once. Only the last
+  // user message changes, so the account's cached prefix still applies.
+  if (
+    !repaired &&
+    !result.committed &&
+    (status === 400 || status === 409 || status === 410) &&
+    TOOL_CONTINUATION_PATTERNS.some((pattern) => pattern.test(hay))
+  ) {
+    return {
+      scope: 'request',
+      action: 'repair-and-retry',
+      reason: 'tool_continuation_repairable',
+      cooldownUntil: null,
+      retrySameAccount: true,
     }
   }
   // Claude Code wraps an AUP refusal as "API Error" and the kernel often
@@ -821,6 +851,10 @@ export function repairAnthropicRequest(body = {}, policy = {}) {
   }
   if (reason === 'search_repairable') {
     return flattenSearchResultHistory(body)
+  }
+  if (reason === 'tool_continuation_repairable') {
+    if (!Array.isArray(body?.messages)) return body
+    return { ...body, messages: readOnlyTailToolResults(body.messages) }
   }
   if (reason === 'thinking_repairable') {
     const next = structuredClone(body)
