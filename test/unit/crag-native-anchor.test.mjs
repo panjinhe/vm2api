@@ -9,7 +9,14 @@ const history = () => [
     role: 'assistant',
     content: [
       { type: 'thinking', thinking: 'x', signature: 'sig' },
-      { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' }, caller: { type: 'direct' }, cache_control: CC },
+      {
+        type: 'tool_use',
+        id: 'toolu_1',
+        name: 'Bash',
+        input: { command: 'ls' },
+        caller: { type: 'direct' },
+        cache_control: CC,
+      },
     ],
   },
   { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'a', cache_control: CC }] },
@@ -36,7 +43,10 @@ test('leaves blocks without caller and non-assistant turns alone', () => {
 })
 
 test('prepareCragPrintBody applies it', () => {
-  const out = prepareCragPrintBody({ model: 'claude-opus-5-5', max_tokens: 10, messages: history() }, { foldSystemMessages: false })
+  const out = prepareCragPrintBody(
+    { model: 'claude-opus-5-5', max_tokens: 10, messages: history() },
+    { foldSystemMessages: false },
+  )
   const toolUse = out.messages[1].content.find((block) => block.type === 'tool_use')
   assert.equal(toolUse.id, 'toolu_1')
   assert.equal(toolUse.cache_control, undefined)
@@ -48,7 +58,9 @@ test('drops cache_control on a tool_result that carries a tool_reference', () =>
     { role: 'user', content: [{ type: 'text', text: 'plan' }] },
     {
       role: 'assistant',
-      content: [{ type: 'tool_use', id: 'toolu_s', name: 'ToolSearch', input: { query: 'x' }, caller: { type: 'direct' } }],
+      content: [
+        { type: 'tool_use', id: 'toolu_s', name: 'ToolSearch', input: { query: 'x' }, caller: { type: 'direct' } },
+      ],
     },
     {
       role: 'user',
@@ -70,7 +82,10 @@ test('drops cache_control on a tool_result that carries a tool_reference', () =>
 
 test('keeps cache_control on an ordinary tool_result and on user text', () => {
   const input = [
-    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: [{ type: 'text', text: 'a' }], cache_control: CC }] },
+    {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 't', content: [{ type: 'text', text: 'a' }], cache_control: CC }],
+    },
     { role: 'user', content: [{ type: 'text', text: 'go', cache_control: CC }] },
   ]
   assert.equal(dropNativeBlockCacheAnchors(input), input)
