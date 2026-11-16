@@ -147,6 +147,24 @@ export function modelCooldownKeys(model) {
   return keys
 }
 
+const LIMIT_HEADER = /^(anthropic-ratelimit-|x-ratelimit-|retry-after$)/i
+
+/**
+ * A 429 whose whole message is "Error" and that carries no rate-limit header
+ * is not a quota answer: the provider sends it to one specific request (a
+ * Claude Code compaction turn through CRAG, #1139) on every account while the
+ * same accounts keep serving everything else.
+ */
+export function isOpaque429(message, headers) {
+  if (
+    String(message || '')
+      .trim()
+      .toLowerCase() !== 'error'
+  )
+    return false
+  return !Object.keys(headers || {}).some((name) => LIMIT_HEADER.test(name))
+}
+
 function isFableWindowLimit(headers) {
   const claim = String(header(headers, 'anthropic-ratelimit-unified-representative-claim') || '')
   const statusOi = String(header(headers, 'anthropic-ratelimit-unified-7d_oi-status') || '').toLowerCase()
@@ -644,6 +662,17 @@ function classifyUpstreamResultRaw(
         reason: 'fable_rate_limited',
         model: FABLE_FAMILY_KEY,
         cooldownUntil: fableReset || now + 60_000,
+      }
+    }
+    // Opaque "Error" 429: the request is the problem, never the account. It
+    // steps aside once and stops on the second account; nothing cools.
+    if (isOpaque429(message, result.headers)) {
+      return {
+        scope: 'account',
+        action: 'continue',
+        reason: 'rate_limited_opaque',
+        cooldownUntil: null,
+        retrySameAccount: false,
       }
     }
     // A Fable 429 without the 7d_oi window proves nothing about the account:

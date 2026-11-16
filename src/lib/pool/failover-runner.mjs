@@ -24,7 +24,7 @@ import { AttemptCoordinator } from './unit-decision.mjs'
 import { SOFT_COOLDOWN_REASONS } from './pool-scheduler.mjs'
 
 /** 429s whose scope is unproven; gradeBare429 decides request vs unit. */
-const BARE_429_REASONS = new Set(['rate_limited_unknown', 'fable_rate_limited_unknown'])
+const BARE_429_REASONS = new Set(['rate_limited_unknown', 'fable_rate_limited_unknown', 'rate_limited_opaque'])
 
 // Seat wait for the one-shot repair hop when the rejected hop already spent the deadline.
 const REPAIR_HOP_WAIT_MS = 30_000
@@ -408,10 +408,17 @@ function hasKernelFailureCode(result) {
   return Object.hasOwn(KERNEL_FAILURE_STATUS, String(result?.body?.error?.code || ''))
 }
 
+/** The provider answered with a 4xx error body: report it, not a generic incomplete. */
+function isProviderClientError(result) {
+  const status = Number(result?.status)
+  return status >= 400 && status < 500 && !result?.committed && !!result?.body?.error
+}
+
 function isUnfinishedLastResult(result, policy) {
   if (!result) return false
   if (policy?.reason === 'incomplete_assistant') return true
   if (hasKernelFailureCode(result)) return false
+  if (isProviderClientError(result)) return false
   if (result.terminalState === 'incomplete') return true
   return isIncompleteAssistantMessage(result)
 }
@@ -661,6 +668,8 @@ export class FailoverRunner {
         retrySameAccount: false,
       }
     }
+    // Opaque "Error" 429 never cools an account, however many sessions hit it.
+    if (policy?.reason === 'rate_limited_opaque') return { ...policy, action: 'continue', cooldownUntil: null }
     const need = Number(this.config.bare_429_account_sessions ?? 2)
     if (!(need > 1) || !accountId) return policy
     const windowMs = Number(this.config.bare_429_window_ms ?? 120_000)

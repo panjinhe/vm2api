@@ -89,7 +89,7 @@ const RESTRICTED_NEW_SESSION = [
  */
 const STATELESS = [
   /^(distill_blocked|policy_blocked|refusal_guard|hard_regex.*|jev.*|decision_model.*)$/,
-  /^(content_filter_refusal|content_policy_refusal|usage_policy_refusal|invalid_request|entitlement_required|http_\d+)$/,
+  /^(content_filter_refusal|content_policy_refusal|usage_policy_refusal|invalid_request|entitlement_required|rate_limited_opaque|http_\d+)$/,
   /_repairable$/,
   /^(concurrency_limit|concurrency_disabled|rpm_limit|slot_busy|quota_band_inflight|refresh_pending)$/,
   /^(model_cooldown|fable_cooldown|fable_concurrency|fable_timeout|fable_plan_denied|fable_rate_limited|fable_rate_limited_unknown|fable_requires_max|model_not_allowed|platform_mismatch|codex_vm)$/,
