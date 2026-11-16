@@ -481,6 +481,27 @@ function incompleteHopResult(result, policy, extras = {}) {
   }
 }
 
+/**
+ * The kernel keeps the provider's real HTTP headers (retry-after, request-id,
+ * rate-limit) in providerResult.response_headers and may return the hop with
+ * none of its own. Classification reads result.headers, so a 429 that said
+ * "retry-after: 7547" read as a bare 429 and only stepped aside for 60s.
+ * Fill in what the hop itself did not carry; the hop's own headers win.
+ */
+export function adoptProviderResponseHeaders(result) {
+  if (!result || result.ok) return result
+  const provider = result.providerResult?.response_headers
+  if (!provider || typeof provider !== 'object') return result
+  const own = result.headers && typeof result.headers === 'object' ? result.headers : {}
+  const ownKeys = new Set(Object.keys(own).map((key) => key.toLowerCase()))
+  const merged = { ...own }
+  for (const [key, value] of Object.entries(provider)) {
+    if (!ownKeys.has(String(key).toLowerCase())) merged[key] = value
+  }
+  result.headers = merged
+  return result
+}
+
 /** max_accounts_per_request spent: answer with the last hop (a bare 429 stays a 429). */
 function stopAtAccountCap(result, policy, accounts, hops, extras = {}) {
   const capped = { account_cap: accounts, attempt_count: hops }
@@ -1106,6 +1127,7 @@ export class FailoverRunner {
         })
         noteHop(result)
         if (result) result.committed = result.committed || committed
+        adoptProviderResponseHeaders(result)
         if (signal?.aborted || isClientCancelledResult(result)) {
           this.attemptsRepo?.complete?.(requestId, attemptNo, {
             upstreamStatus: result?.status ?? null,
