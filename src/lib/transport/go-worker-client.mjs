@@ -2050,10 +2050,55 @@ export function recoverThinkingOnlyMaxTokens(result, { onEvent, onCommit } = {})
   })()
 }
 
+/** CRAG policy blocks that depend only on the request body: every slot rejects them the same way. */
+const DETERMINISTIC_CRAG_BLOCKS = new Set(['CRAG_CACHE_CONTROL'])
+
+export function cragDeterministicBlock(result) {
+  const facts = result?.providerResult
+  const exception = facts?.observation?.exception
+  if (
+    !result ||
+    result.ok ||
+    result.committed ||
+    facts?.schema_version !== 2 ||
+    facts.source !== 'crag' ||
+    facts.provider_complete === true ||
+    facts.observation?.policy_blocked !== true ||
+    !DETERMINISTIC_CRAG_BLOCKS.has(exception?.code)
+  )
+    return null
+  return { code: exception.code, message: String(exception.message || '').slice(0, 300) }
+}
+
+/**
+ * Surface a deterministic CRAG policy block as itself instead of an empty hop,
+ * so the pool stops instead of replaying the same body on every slot.
+ */
+export function surfaceCragPolicyBlock(result) {
+  const block = cragDeterministicBlock(result)
+  if (!block) return result
+  return {
+    ...result,
+    ok: false,
+    status: 502,
+    terminalState: 'rejected',
+    cragPolicyBlock: block,
+    body: {
+      type: 'error',
+      error: {
+        type: 'api_error',
+        code: 'crag_policy_blocked',
+        message: `Gateway kernel rejected the request before dispatch (${block.code}: ${block.message})`,
+        details: { retryable: false },
+      },
+    },
+  }
+}
+
 export async function callGoWorker(opts = {}) {
-  return recoverThinkingOnlyMaxTokens(await callGoWorkerRaw(opts), {})
+  return surfaceCragPolicyBlock(await recoverThinkingOnlyMaxTokens(await callGoWorkerRaw(opts), {}))
 }
 
 export async function streamGoWorker(opts = {}) {
-  return recoverThinkingOnlyMaxTokens(await streamGoWorkerRaw(opts), opts)
+  return surfaceCragPolicyBlock(await recoverThinkingOnlyMaxTokens(await streamGoWorkerRaw(opts), opts))
 }
