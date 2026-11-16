@@ -463,12 +463,13 @@ export function dropNativeBlockCacheAnchors(messages) {
  * `tool_addition.tool.type: "tool_reference"` and rejects Claude Code 2.1.325's
  * inline `tool_definition` with 400 "tool_addition requires a tool name"; the
  * block then stays in history, so every later turn of that session fails.
- * Lift each inline definition into top-level `tools` (deferred, the same shape
- * Claude Code uses for its own deferred tools) and point the block at it by
- * name. A tool already declared at top level is not duplicated.
+ * Lift each inline definition into top-level `tools` and point the block at it
+ * by name. A tool already declared at top level is not duplicated. The lifted
+ * tool is a plain (not deferred) tool: through CRAG a deferred tool named by a
+ * tool_reference addition is not reliably offered to the model. The tools
+ * prefix changes once, on the turn the tool is added.
  * The gateway's eager_input_streaming policy has already run on the declared
- * tools by now; a lifted tool follows it (when every declared custom tool is
- * eager), since CRAG does not offer the model a deferred tool without it.
+ * tools; a lifted tool follows it when every declared custom tool is eager.
  */
 export function liftInlineToolDefinitions(body) {
   if (!Array.isArray(body?.messages)) return body
@@ -489,7 +490,7 @@ export function liftInlineToolDefinitions(body) {
         const definition = block.tool.definition
         if (!known.has(definition.name)) {
           known.add(definition.name)
-          const tool = { ...definition, defer_loading: true }
+          const tool = { ...definition }
           if (eager && typeof definition.eager_input_streaming !== 'boolean') tool.eager_input_streaming = true
           lifted.push(tool)
         }

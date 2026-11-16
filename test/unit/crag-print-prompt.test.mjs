@@ -550,7 +550,7 @@ test('prepareCragPrintBody drops the top-level safeguards field the CRAG kernel 
   assert.ok(body.safeguards, 'caller body is not mutated')
 })
 
-test('prepareCragPrintBody lifts inline tool_definition additions into deferred top-level tools (#1118)', () => {
+test('prepareCragPrintBody lifts inline tool_definition additions into top-level tools (#1118)', () => {
   const definition = { name: 'Artifact', description: 'Publish', input_schema: { type: 'object', properties: {} } }
   const read = { name: 'Read', description: 'Read', input_schema: { type: 'object', properties: {} } }
   const addition = { type: 'tool_addition', tool: { type: 'tool_definition', definition } }
@@ -566,7 +566,7 @@ test('prepareCragPrintBody lifts inline tool_definition additions into deferred 
     ],
   }
   const out = prepareCragPrintBody(body, { preset: 'official_full', foldSystemMessages: false })
-  assert.deepEqual(out.tools, [read, { ...definition, defer_loading: true }])
+  assert.deepEqual(out.tools, [read, definition])
   assert.deepEqual(out.messages[1].content[1], { type: 'tool_addition', tool: { type: 'tool_reference', name: 'Artifact' } })
   assert.deepEqual(out.messages[3].content[0], { type: 'tool_addition', tool: { type: 'tool_reference', name: 'Artifact' } })
   assert.equal(JSON.stringify(out).includes('tool_definition'), false)
@@ -591,7 +591,7 @@ test('liftInlineToolDefinitions marks a lifted tool eager when the declared cust
   const addition = { type: 'tool_addition', tool: { type: 'tool_definition', definition: { name: 'Artifact', input_schema: { type: 'object' } } } }
   const messages = [{ role: 'system', content: [addition] }]
   const eager = liftInlineToolDefinitions({ tools: [{ name: 'Read', input_schema: {}, eager_input_streaming: true }], messages })
-  assert.deepEqual(eager.tools[1], { name: 'Artifact', input_schema: { type: 'object' }, defer_loading: true, eager_input_streaming: true })
+  assert.deepEqual(eager.tools[1], { name: 'Artifact', input_schema: { type: 'object' }, eager_input_streaming: true })
   const mixed = liftInlineToolDefinitions({
     tools: [{ name: 'Read', input_schema: {}, eager_input_streaming: true }, { name: 'Bash', input_schema: {} }],
     messages,
