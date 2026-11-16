@@ -261,3 +261,25 @@ test('classifier incompatibilities preserve code and remain request scoped', () 
     assert.equal(policy.cooldownUntil, null)
   }
 })
+
+test('#1072 CRAG isolated classifier drops metadata; main CRAG and cli-node keep it', () => {
+  const body = { ...classifierFixture(), metadata: { user_id: 'u' } }
+  const crag = {
+    homeDir: '',
+    vm: { claude: { mode: 'setup-token', scope: 'user:inference' } },
+    workerStatus: { runtime_variant: 'crag-v2', capabilities: ['generation_controls_v3'] },
+  }
+  const isolated = finalizeWorkerPayload({ body, reqHeaders: {}, exec: crag, identity: null, requestContext: context })
+  assert.equal(isolated.body.metadata, undefined)
+  assert.deepEqual(isolated.body.stop_sequences, body.stop_sequences)
+  assert.deepEqual(body.metadata, { user_id: 'u' })
+  const cliNode = finalizeWorkerPayload({
+    body,
+    reqHeaders: {},
+    exec: { ...crag, workerStatus: undefined },
+    identity: null,
+    requestContext: context,
+    cliHop: true,
+  })
+  assert.deepEqual(cliNode.body.metadata, { user_id: 'u' })
+})

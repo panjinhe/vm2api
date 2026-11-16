@@ -557,6 +557,14 @@ function dumpSessionEnvelope(envelope) {
 
 function gateCragBody(body, print, health, isolated = false) {
   if (!body || typeof body !== 'object') return body
+  // Temporary (dofastted/vm2api#1072): the CRAG 3.0.x isolated provider (auto
+  // mode classifier) rejects body.metadata with 400 "unsupported isolated
+  // provider field". Identity rewrite always stamps metadata.user_id, so drop it
+  // here, as the main path already does. Remove once the kernel accepts it.
+  if (print && isolated && Object.hasOwn(body, 'metadata')) {
+    const { metadata: _metadata, ...rest } = body
+    body = rest
+  }
   const caps = print && Array.isArray(health?.capabilities) ? health.capabilities : []
   const prompt = body.crag_prompt
   const model = print && !isolated && cragConsumesModelDirective(health) ? modelDirectiveForCrag(body.model) : null
