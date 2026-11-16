@@ -8,6 +8,7 @@
 import { detectDistill, distillBlockError, isOpenaiPlatformModel } from '../core/distill-detect.mjs'
 import {
   inboundRefusalDeviceId,
+  matchRefusalSession,
   matchStoredRefusal,
   refusalFingerprint,
   refusalGuardError,
@@ -62,8 +63,16 @@ function similarityRatio(value) {
   return n > 1 ? n / 100 : n
 }
 
-export function commitProtocolBlock(decision, { repo, devices, policy, requestId } = {}) {
+export function commitProtocolBlock(decision, { repo, devices, sessions, policy, requestId } = {}) {
   if (!decision || decision.action !== 'block') return
+  if (decision.kind === 'session') {
+    try {
+      sessions?.hit?.(decision.sessionId)
+    } catch {
+      /* counter is best-effort */
+    }
+    return
+  }
   if (decision.kind === 'device') {
     try {
       devices?.hit?.(decision.deviceId)
@@ -130,6 +139,7 @@ export async function evaluateProtocolIntercept({
   jev,
   repo,
   devices,
+  sessions = null,
   requestId,
   account = null,
   scopeMatched = false,
@@ -138,6 +148,26 @@ export async function evaluateProtocolIntercept({
   interceptSession = null,
 } = {}) {
   const interceptOpts = { interceptSession, ctx: bodyCtx }
+  // A session the provider already refused never hops again: before scope,
+  // distill, and every other layer, whatever the prompt now says.
+  if (policy?.session_block_enabled !== false && sessions) {
+    const refused = matchRefusalSession({ inbound, body, headers, sessions })
+    if (refused) {
+      const error = refusalGuardError(requestId, refused)
+      return block({
+        kind: 'session',
+        via: 'refusal-guard',
+        final_state: 'refusal_session',
+        error,
+        errorMessage: error.body?.error?.message,
+        intercept: gateVerdict({ kind: 'block', by: 'refusal', keyword: 'session' }),
+        sessionId: refused.sessionId,
+        banDevice: false,
+        remember: false,
+        reason: 'refusal_session',
+      })
+    }
+  }
   // Explicit API endpoint opt-in supplies scope without an OAuth account.
   // GPT / Codex skips every layer unless the panel opts it in. Once a scope
   // is set, the slot decides GPT: a scope with no GPT pair and no named

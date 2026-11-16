@@ -16,9 +16,11 @@ import {
   refusalGuardPolicy,
   refusalPreview,
   refusalPromptSignature,
+  refusalSessionId,
 } from '../core/refusal-guard.mjs'
 import { RefusalGuardsRepo } from '../db/repos/refusal-guards-repo.mjs'
 import { RefusalDeviceBlocksRepo } from '../db/repos/refusal-device-blocks-repo.mjs'
+import { RefusalSessionBlocksRepo } from '../db/repos/refusal-session-blocks-repo.mjs'
 import { SettingsRepo } from '../db/repos/settings-repo.mjs'
 import { findAccount } from '../admin/panel-api.mjs'
 import { jevScopeWaits, readJevConfig, scopeAccountFromVm } from './jev-intercept.mjs'
@@ -433,6 +435,7 @@ export function createHandleProtocol(deps) {
       jev,
       repo: refusalRepo(),
       devices: deviceRepo(),
+      sessions: sessionRepo(),
       requestId,
       account,
       scopeMatched,
@@ -493,6 +496,34 @@ export function createHandleProtocol(deps) {
     }
   }
 
+  function sessionRepo() {
+    if (deps.refusalSessions) return deps.refusalSessions
+    try {
+      return new RefusalSessionBlocksRepo()
+    } catch {
+      return null
+    }
+  }
+
+  /** Any upstream content refusal ends the caller session for good (own switch, default on). */
+  function blockRefusedSession({ inbound, body, headers, result, requestId }) {
+    if (refusalPolicy().session_block_enabled === false) return
+    const sessionId = refusalSessionId({ inbound, body, headers })
+    if (!sessionId) return
+    try {
+      sessionRepo()?.block?.({
+        sessionId,
+        requestId,
+        accountId: result?.accountId || null,
+        model: body?.model || inbound?.model || '',
+        preview: refusalPreview(body, inbound),
+        reason: 'upstream_refusal',
+      })
+    } catch {
+      /* the refusal itself still goes back to the caller */
+    }
+  }
+
   function banRefusalDevice(deviceId, { requestId, fingerprint, reason }) {
     if (!deviceId) return
     try {
@@ -512,8 +543,9 @@ export function createHandleProtocol(deps) {
   }
 
   function rememberRefusal({ inbound, body, headers, result, logBag, requestId }) {
-    if (!refusalEnabled()) return
     const contentRefusal = isUpstreamRefusal(result, logBag)
+    if (contentRefusal) blockRefusedSession({ inbound, body, headers, result, requestId })
+    if (!refusalEnabled()) return
     const timed = result?.policy?.rememberRefusal === true
     if (!contentRefusal && !timed) return
     const repo = refusalRepo()
