@@ -440,6 +440,52 @@ export function dropNativeBlockCacheAnchors(messages) {
 }
 
 /**
+ * Temporary (dofastted/vm2api#1118): CRAG 3.0.7 only understands
+ * `tool_addition.tool.type: "tool_reference"` and rejects Claude Code 2.1.325's
+ * inline `tool_definition` with 400 "tool_addition requires a tool name"; the
+ * block then stays in history, so every later turn of that session fails.
+ * Lift each inline definition into top-level `tools` (deferred, the same shape
+ * Claude Code uses for its own deferred tools) and point the block at it by
+ * name. A tool already declared at top level is not duplicated.
+ */
+export function liftInlineToolDefinitions(body) {
+  if (!Array.isArray(body?.messages)) return body
+  const lifted = []
+  const known = new Set((Array.isArray(body.tools) ? body.tools : []).map((tool) => tool?.name).filter(Boolean))
+  let changed = false
+  const messages = body.messages.map((message) => {
+    if (!Array.isArray(message?.content)) return message
+    if (!message.content.some(isInlineToolDefinition)) return message
+    changed = true
+    return {
+      ...message,
+      content: message.content.map((block) => {
+        if (!isInlineToolDefinition(block)) return block
+        const definition = block.tool.definition
+        if (!known.has(definition.name)) {
+          known.add(definition.name)
+          lifted.push({ ...definition, defer_loading: true })
+        }
+        return { ...block, tool: { type: 'tool_reference', name: definition.name } }
+      }),
+    }
+  })
+  if (!changed) return body
+  const out = { ...body, messages }
+  if (lifted.length) out.tools = [...(Array.isArray(body.tools) ? body.tools : []), ...lifted]
+  return out
+}
+
+function isInlineToolDefinition(block) {
+  return (
+    block?.type === 'tool_addition' &&
+    block.tool?.type === 'tool_definition' &&
+    typeof block.tool.definition?.name === 'string' &&
+    block.tool.definition.name !== ''
+  )
+}
+
+/**
  * @param {object} body caller body, before cli-node persona injection
  * @param {{ preset?: 'official_full' | 'zero', officialPassthrough?: boolean, capabilities?: string[], agentSummary?: boolean, foldSystemMessages?: boolean }} [options]
  */
@@ -453,7 +499,7 @@ export function prepareCragPrintBody(
     foldSystemMessages = true,
   } = {},
 ) {
-  const out = { ...(body || {}) }
+  const out = liftInlineToolDefinitions({ ...(body || {}) })
   // Temporary: the CRAG kernel (3.0.7, CLI 2.1.321) rejects the Claude Code
   // 2.1.325 top-level `safeguards` field with 400 "unsupported request field".
   // Drop it until the kernel accepts it; the beta header alone is harmless.
