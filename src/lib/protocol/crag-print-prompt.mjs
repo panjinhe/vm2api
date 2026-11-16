@@ -446,6 +446,10 @@ export function prepareCragPrintBody(
   } = {},
 ) {
   const out = { ...(body || {}) }
+  // Temporary: the CRAG kernel (3.0.7, CLI 2.1.321) rejects the Claude Code
+  // 2.1.325 top-level `safeguards` field with 400 "unsupported request field".
+  // Drop it until the kernel accepts it; the beta header alone is harmless.
+  delete out.safeguards
   if (Array.isArray(out.messages)) out.messages = dropUnsignedHistoryThinking(out.messages)
   if (agentSummary) out.messages = readOnlySummaryResults(out.messages)
   if (foldSystemMessages) {

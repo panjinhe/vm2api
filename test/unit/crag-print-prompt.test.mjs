@@ -537,3 +537,14 @@ test('dropUnsignedHistoryThinking keeps a turn that would be emptied and returns
   const clean = [{ role: 'assistant', content: [{ type: 'text', text: 'a' }] }]
   assert.equal(dropUnsignedHistoryThinking(clean), clean)
 })
+
+test('prepareCragPrintBody drops the top-level safeguards field the CRAG kernel rejects', () => {
+  const body = {
+    model: 'claude-haiku-5-5',
+    safeguards: [{ type: 'dangerous_tool_use', classifier_context: { v: 1, permission_mode: 'auto' } }],
+    messages: [{ role: 'user', content: 'hi' }],
+  }
+  const out = prepareCragPrintBody(body, { preset: 'official_full' })
+  assert.equal('safeguards' in out, false)
+  assert.ok(body.safeguards, 'caller body is not mutated')
+})
