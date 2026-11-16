@@ -26,6 +26,8 @@ export function RefusalSettings() {
   const [clearDevicesOpen, setClearDevicesOpen] = useState(false)
   const [deleteFp, setDeleteFp] = useState<string | null>(null)
   const [unblockId, setUnblockId] = useState<string | null>(null)
+  const [clearSessionsOpen, setClearSessionsOpen] = useState(false)
+  const [unblockSession, setUnblockSession] = useState<string | null>(null)
 
   const save = useMutation({
     mutationFn: (patch: Partial<RefusalGuardConfig>) =>
@@ -103,6 +105,38 @@ export function RefusalSettings() {
     onError: (error: Error) => toast.error(error.message),
   })
 
+  const releaseSession = useMutation({
+    mutationFn: (sessionId: string) =>
+      api<RefusalGuardConfig>('/api/panel/refusal-session-blocks', {
+        method: 'DELETE',
+        body: JSON.stringify({ session_id: sessionId }),
+      }),
+    onSuccess: async () => {
+      toast.success('已解除会话封锁')
+      setUnblockSession(null)
+      await qc.invalidateQueries({
+        queryKey: refusalGuardsQueryOptions().queryKey,
+      })
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+
+  const clearSessions = useMutation({
+    mutationFn: () =>
+      api<RefusalGuardConfig>('/api/panel/refusal-session-blocks', {
+        method: 'DELETE',
+        body: JSON.stringify({ confirm: true }),
+      }),
+    onSuccess: async () => {
+      toast.success('已清空会话封锁')
+      setClearSessionsOpen(false)
+      await qc.invalidateQueries({
+        queryKey: refusalGuardsQueryOptions().queryKey,
+      })
+    },
+    onError: (error: Error) => toast.error(error.message),
+  })
+
   if (q.error) {
     return (
       <p className='p-4 text-sm text-destructive' role='alert'>
@@ -115,6 +149,8 @@ export function RefusalSettings() {
   const devices = data.devices ?? []
   const deviceCount = data.device_count ?? devices.length
   const similarity = data.similarity ?? 90
+  const sessions = data.sessions ?? []
+  const sessionCount = data.session_count ?? sessions.length
   const deleting = data.items.find((item) => item.fingerprint === deleteFp)
 
   return (
@@ -124,6 +160,16 @@ export function RefusalSettings() {
         hint='上游拒答过的正文记成指纹。精确命中直接 503；近似只比较用户正文，短于 512 字不做。改动立即生效。'
       >
         <ToggleList>
+          <ToggleItem
+            label='封锁拒答会话'
+            desc='上游拒答一次，这个会话（含子 agent）永久不再转发，也不换号重试；不受下面总开关影响'
+          >
+            <Switch
+              checked={data.session_block_enabled !== false}
+              disabled={save.isPending}
+              onCheckedChange={(v) => save.mutate({ session_block_enabled: v })}
+            />
+          </ToggleItem>
           <ToggleItem label='拦截重复拒答' desc='REFUSAL_GUARD=0 会关掉整关'>
             <Switch
               checked={data.enabled}
@@ -174,6 +220,60 @@ export function RefusalSettings() {
             </div>
           </ToggleItem>
         </ToggleList>
+      </Group>
+
+      <Group
+        title='已封锁会话'
+        hint={
+          sessionCount
+            ? sessions.length < sessionCount
+              ? `显示最近 ${sessions.length} / ${sessionCount}`
+              : `${sessionCount} 个`
+            : '还没有'
+        }
+        action={
+          <Button
+            size='sm'
+            variant='outline'
+            className='cursor-pointer'
+            disabled={!sessionCount || clearSessions.isPending}
+            onClick={() => setClearSessionsOpen(true)}
+          >
+            全部解除
+          </Button>
+        }
+      >
+        {sessions.length ? (
+          <ul className='max-h-80 divide-y overflow-y-auto rounded-xl border'>
+            {sessions.map((item) => (
+              <li
+                key={item.session_id}
+                className='flex items-center justify-between gap-2 px-3 py-2'
+              >
+                <div className='min-w-0 flex-1'>
+                  <p
+                    className='line-clamp-2 text-sm break-words'
+                    title={item.preview || undefined}
+                  >
+                    {item.preview || '（无预览）'}
+                  </p>
+                  <p className='truncate font-mono text-xs text-muted-foreground tabular-nums'>
+                    {item.session_id} · {item.model || '—'} · 拦下{' '}
+                    {item.hit_count} 次 · {fmtExpiresAt(item.last_seen_at)}
+                  </p>
+                </div>
+                <Button
+                  size='sm'
+                  variant='ghost'
+                  className='cursor-pointer'
+                  onClick={() => setUnblockSession(item.session_id)}
+                >
+                  解除
+                </Button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
       </Group>
 
       <div className='grid gap-8 xl:grid-cols-2'>
@@ -310,6 +410,32 @@ export function RefusalSettings() {
         destructive
         isLoading={clearDevices.isPending}
         handleConfirm={() => clearDevices.mutate()}
+      />
+      <ConfirmDialog
+        open={clearSessionsOpen}
+        onOpenChange={setClearSessionsOpen}
+        title='解除全部会话封锁'
+        desc='解除后这些会话的下一轮会再次打上游，可能再次触发拒答。'
+        confirmText='全部解除'
+        cancelBtnText='取消'
+        destructive
+        isLoading={clearSessions.isPending}
+        handleConfirm={() => clearSessions.mutate()}
+      />
+      <ConfirmDialog
+        open={!!unblockSession}
+        onOpenChange={(open) => {
+          if (!open) setUnblockSession(null)
+        }}
+        title='解除这个会话'
+        desc={`解除后会话 ${unblockSession || ''} 的下一轮会再次打上游。`}
+        confirmText='解除'
+        cancelBtnText='取消'
+        destructive
+        isLoading={releaseSession.isPending}
+        handleConfirm={() => {
+          if (unblockSession) releaseSession.mutate(unblockSession)
+        }}
       />
       <ConfirmDialog
         open={!!deleteFp}

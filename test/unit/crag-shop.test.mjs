@@ -79,14 +79,15 @@ test('shop migration numbering preserves applied schemas and orders from either 
         activation_phase = 'redeemed', activation_attempts = 2`).run('a'.repeat(64))
     }
 
+    // Later, unrelated migrations also apply here; this test only owns 055–058.
     assert.deepEqual(
-      applyMigrations(db),
+      applyMigrations(db).filter((name) => name < '059_'),
       legacy ? ['055_account_lifetime_usage.sql'] : ['057_crag_shop_commerce.sql', '058_crag_shop_activation.sql'],
     )
     assert.deepEqual(applyMigrations(db), [])
     assert.deepEqual(
       db
-        .prepare("SELECT name FROM schema_migrations WHERE version >= '055' ORDER BY version")
+        .prepare("SELECT name FROM schema_migrations WHERE version BETWEEN '055' AND '058' ORDER BY version")
         .all()
         .map((r) => r.name),
       [
