@@ -523,7 +523,7 @@ test('bare Fable 429 without the 7d_oi window is unproven, not a Fable window li
   const policy = classifyUpstreamResult(
     {
       status: 429,
-      body: { type: 'error', error: { type: 'rate_limit_error', message: 'Error' } },
+      body: { type: 'error', error: { type: 'rate_limit_error', message: 'Rate limited' } },
       headers: { 'request-id': 'req_x', 'content-type': 'application/json' },
     },
     { model: 'claude-fable-5-2', now },
@@ -1078,4 +1078,24 @@ test('explicit overload errors retain overload classification', () => {
     const policy = classifyUpstreamResult({ status, body: { error: { message: 'Overloaded' } } })
     assert.equal(policy.reason, 'provider_overloaded')
   }
+})
+
+test('opaque "Error" 429 without rate-limit headers is graded rate_limited_opaque with no cooldown', () => {
+  const body = { type: 'error', error: { type: 'rate_limit_error', message: 'Error' } }
+  for (const model of ['claude-opus-5-5', 'claude-fable-5-2']) {
+    const policy = classifyUpstreamResult({ status: 429, headers: { 'request-id': 'r' }, body }, { model })
+    assert.equal(policy.reason, 'rate_limited_opaque', model)
+    assert.equal(policy.cooldownUntil, null)
+    assert.equal(policy.action, 'continue')
+  }
+  const withHeader = classifyUpstreamResult(
+    { status: 429, headers: { 'retry-after': '30' }, body },
+    { model: 'claude-opus-5-5' },
+  )
+  assert.notEqual(withHeader.reason, 'rate_limited_opaque')
+  const worded = classifyUpstreamResult(
+    { status: 429, headers: {}, body: { type: 'error', error: { type: 'rate_limit_error', message: 'Rate limited' } } },
+    { model: 'claude-opus-5-5' },
+  )
+  assert.equal(worded.reason, 'rate_limited_unknown')
 })

@@ -2189,14 +2189,15 @@ test('a slot that cannot refresh its credential hops and cools down', async () =
   assert.equal(scheduler.cooldowns[0].update.status, 'cooldown')
 })
 
-function bare429() {
+/** A 429 with no rate-limit header. "Error" alone is the opaque kind (#1139). */
+function bare429(message = 'Error') {
   return {
     ok: false,
     status: 429,
     committed: false,
     terminalState: 'incomplete',
     headers: { 'request-id': 'req_up_1', 'x-unrelated': 'drop' },
-    body: { type: 'error', error: { type: 'rate_limit_error', message: 'Error' } },
+    body: { type: 'error', error: { type: 'rate_limit_error', message } },
   }
 }
 
@@ -2223,7 +2224,7 @@ test('bare 429 on two accounts of one request stops as request scope and cools n
 test('bare 429 cools an account only once a second session hits it', async () => {
   const scheduler = new Scheduler([candidate(1), candidate(2)])
   const runner = new FailoverRunner({ scheduler })
-  const call = ({ candidate: selected }) => (selected.accountId === 'account-1' ? bare429() : success())
+  const call = ({ candidate: selected }) => (selected.accountId === 'account-1' ? bare429('Rate limited') : success())
   const base = { canonicalBody: { model: 'claude-sonnet-test' }, model: 'claude-sonnet-test', callAttempt: call }
   const first = await runner.run({ ...base, requestId: 'req-s1', stickyKey: 'session-1' })
   assert.equal(first.ok, true)
@@ -2261,7 +2262,7 @@ test('bare Fable 429 on two accounts of one request stops and cools no Fable fam
 test('bare Fable 429 cools the Fable family only once a second session hits it', async () => {
   const scheduler = new Scheduler([candidate(1), candidate(2)])
   const runner = new FailoverRunner({ scheduler })
-  const call = ({ candidate: selected }) => (selected.accountId === 'account-1' ? bare429() : success())
+  const call = ({ candidate: selected }) => (selected.accountId === 'account-1' ? bare429('Rate limited') : success())
   const base = { canonicalBody: { model: 'claude-fable-5-2' }, model: 'claude-fable-5-2', callAttempt: call }
   assert.equal((await runner.run({ ...base, requestId: 'req-f1', stickyKey: 'session-1' })).ok, true)
   assert.equal(scheduler.cooldowns.length, 0)
@@ -2337,4 +2338,54 @@ test('failed hops are kept for the request log', async () => {
   assert.deepEqual(hops[0].headers, { 'request-id': 'req_up_1' })
   assert.match(hops[0].body, /rate_limit_error/)
   assert.equal(takeHopErrors('req-hop-log'), null)
+})
+
+test('opaque "Error" 429 never cools an account, whatever the number of sessions', async () => {
+  for (const model of ['claude-sonnet-test', 'claude-fable-5-2']) {
+    const scheduler = new Scheduler([candidate(1), candidate(2)])
+    const runner = new FailoverRunner({ scheduler })
+    const call = ({ candidate: selected }) => (selected.accountId === 'account-1' ? bare429() : success())
+    const base = { canonicalBody: { model }, model, callAttempt: call }
+    for (const session of ['s1', 's2', 's3']) {
+      const result = await runner.run({ ...base, requestId: `req-${model}-${session}`, stickyKey: session })
+      assert.equal(result.ok, true)
+      assert.equal(result.accountId, 'account-2')
+    }
+    assert.equal(scheduler.cooldowns.length, 0, model)
+  }
+})
+
+test('opaque 429 on two accounts stops the request and reaches the client as 429', async () => {
+  const scheduler = new Scheduler([candidate(1), candidate(2), candidate(3)])
+  const runner = new FailoverRunner({ scheduler })
+  const seen = []
+  const result = await runner.run({
+    requestId: 'req-opaque',
+    stickyKey: 'session-o',
+    canonicalBody: { model: 'claude-opus-test' },
+    model: 'claude-opus-test',
+    callAttempt: ({ candidate: selected }) => {
+      seen.push(selected.accountId)
+      return bare429()
+    },
+  })
+  assert.deepEqual(seen, ['account-1', 'account-2'])
+  assert.equal(result.status, 429)
+  assert.equal(result.body.error.type, 'rate_limit_error')
+  assert.equal(scheduler.cooldowns.length, 0)
+})
+
+test('a 429 that ends the request on one account is reported as 429, not incomplete 502', async () => {
+  const scheduler = new Scheduler([candidate(1)])
+  const runner = new FailoverRunner({ scheduler })
+  const result = await runner.run({
+    requestId: 'req-one-429',
+    stickyKey: 'session-one',
+    canonicalBody: { model: 'claude-opus-test' },
+    model: 'claude-opus-test',
+    callAttempt: () => bare429(),
+  })
+  assert.equal(result.status, 429)
+  assert.equal(result.body.error.type, 'rate_limit_error')
+  assert.notEqual(result.body.error.code, 'incomplete_response')
 })
