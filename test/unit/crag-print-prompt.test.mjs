@@ -295,7 +295,9 @@ test('summary cleanup preserves result text, media, errors and historical tool p
   current.cache_control = { type: 'ephemeral', ttl: '1h' }
   const before = structuredClone(body)
   const out = prepareCragPrintBody(body, { agentSummary: true, officialPassthrough: true, foldSystemMessages: false })
-  assert.deepEqual(out.messages.slice(0, 4), before.messages.slice(0, 4))
+  assert.deepEqual(out.messages.slice(0, 3), before.messages.slice(0, 3))
+  // The call is read-only too, so no tool_use is left without its tool_result.
+  assert.deepEqual(out.messages[3].content, [{ type: 'text', text: '[tool call Write test-tool] {"content":"Draft"}' }])
   assert.deepEqual(out.messages[4].content, [
     { type: 'text', text: '[tool result test-tool (error)]', cache_control: current.cache_control },
     ...current.content,
@@ -549,8 +551,14 @@ test('prepareCragPrintBody lifts inline tool_definition additions into top-level
   }
   const out = prepareCragPrintBody(body, { preset: 'official_full', foldSystemMessages: false })
   assert.deepEqual(out.tools, [read, definition])
-  assert.deepEqual(out.messages[1].content[1], { type: 'tool_addition', tool: { type: 'tool_reference', name: 'Artifact' } })
-  assert.deepEqual(out.messages[3].content[0], { type: 'tool_addition', tool: { type: 'tool_reference', name: 'Artifact' } })
+  assert.deepEqual(out.messages[1].content[1], {
+    type: 'tool_addition',
+    tool: { type: 'tool_reference', name: 'Artifact' },
+  })
+  assert.deepEqual(out.messages[3].content[0], {
+    type: 'tool_addition',
+    tool: { type: 'tool_reference', name: 'Artifact' },
+  })
   assert.equal(JSON.stringify(out).includes('tool_definition'), false)
   assert.equal(body.tools.length, 1, 'caller body is not mutated')
   assert.equal(body.messages[1].content[1], addition)
@@ -558,11 +566,19 @@ test('prepareCragPrintBody lifts inline tool_definition additions into top-level
 
 test('liftInlineToolDefinitions leaves tool_reference additions and declared tools alone', () => {
   const ref = { type: 'tool_addition', tool: { type: 'tool_reference', name: 'EnterWorktree' } }
-  const body = { tools: [{ name: 'EnterWorktree', defer_loading: true }], messages: [{ role: 'system', content: [ref] }] }
+  const body = {
+    tools: [{ name: 'EnterWorktree', defer_loading: true }],
+    messages: [{ role: 'system', content: [ref] }],
+  }
   assert.equal(liftInlineToolDefinitions(body), body)
   const declared = {
     tools: [{ name: 'Artifact' }],
-    messages: [{ role: 'system', content: [{ type: 'tool_addition', tool: { type: 'tool_definition', definition: { name: 'Artifact' } } }] }],
+    messages: [
+      {
+        role: 'system',
+        content: [{ type: 'tool_addition', tool: { type: 'tool_definition', definition: { name: 'Artifact' } } }],
+      },
+    ],
   }
   const out = liftInlineToolDefinitions(declared)
   assert.deepEqual(out.tools, [{ name: 'Artifact' }])
@@ -570,13 +586,38 @@ test('liftInlineToolDefinitions leaves tool_reference additions and declared too
 })
 
 test('liftInlineToolDefinitions marks a lifted tool eager when the declared custom tools are', () => {
-  const addition = { type: 'tool_addition', tool: { type: 'tool_definition', definition: { name: 'Artifact', input_schema: { type: 'object' } } } }
+  const addition = {
+    type: 'tool_addition',
+    tool: { type: 'tool_definition', definition: { name: 'Artifact', input_schema: { type: 'object' } } },
+  }
   const messages = [{ role: 'system', content: [addition] }]
-  const eager = liftInlineToolDefinitions({ tools: [{ name: 'Read', input_schema: {}, eager_input_streaming: true }], messages })
+  const eager = liftInlineToolDefinitions({
+    tools: [{ name: 'Read', input_schema: {}, eager_input_streaming: true }],
+    messages,
+  })
   assert.deepEqual(eager.tools[1], { name: 'Artifact', input_schema: { type: 'object' }, eager_input_streaming: true })
   const mixed = liftInlineToolDefinitions({
-    tools: [{ name: 'Read', input_schema: {}, eager_input_streaming: true }, { name: 'Bash', input_schema: {} }],
+    tools: [
+      { name: 'Read', input_schema: {}, eager_input_streaming: true },
+      { name: 'Bash', input_schema: {} },
+    ],
     messages,
   })
   assert.equal('eager_input_streaming' in mixed.tools[2], false)
+})
+
+test('an agent summary leaves no unpaired tool_use for CRAG (history tool_result set is incomplete)', () => {
+  const body = agentBody({ summary: true })
+  body.messages[1].content.push({ type: 'tool_use', id: 'other', name: 'Read', input: {} })
+  const out = prepareCragPrintBody(body, { agentSummary: true }).messages
+  const answered = out
+    .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+    .filter((b) => b.type === 'tool_result')
+  const calls = out.flatMap((m) => (m.role === 'assistant' && Array.isArray(m.content) ? m.content : []))
+  // Only the unanswered call stays live; the answered one is text now.
+  assert.deepEqual(
+    calls.filter((b) => b.type === 'tool_use').map((b) => b.id),
+    ['other'],
+  )
+  assert.equal(answered.length, 0)
 })
