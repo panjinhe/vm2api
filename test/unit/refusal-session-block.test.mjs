@@ -140,7 +140,7 @@ test('switching the session block off lets the session through', async () => {
   })
 })
 
-test("repo keeps the first source, counts hits, removes and clears", async () => {
+test('repo keeps the first source, counts hits, removes and clears', async () => {
   await withDb((db) => {
     const sessions = new RefusalSessionBlocksRepo(db)
     sessions.block({ sessionId: SESSION, requestId: 'first', accountId: 'acct-1' })

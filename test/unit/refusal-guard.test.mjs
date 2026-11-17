@@ -232,11 +232,12 @@ test('post-hop warms the right front rule without treating ordinary HTTP 400 as 
           'Third-party apps now draw from your extra usage, not your plan limits. Add more at claude.ai/settings/usage and keep going.',
         ),
       }),
-      'upstream:extra_usage_session',
+      // Deploy: a third-party client billed against extra usage is not a
+      // refusal, so it neither caches a prompt nor bans the session.
+      '',
     )
     assert.equal(repo.count(), 0)
-    assert.equal(devices.findBan(identity).subject_kind, 'session')
-    devices.clear()
+    assert.equal(devices.count(), 0)
     assert.equal(
       observeUpstreamRisk({ ...opts, result: upstream('Third-party apps now draw from your extra usage', 503) }),
       '',

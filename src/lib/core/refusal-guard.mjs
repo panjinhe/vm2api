@@ -9,6 +9,7 @@
 import { createHash } from 'node:crypto'
 import {
   isThirdPartyClientMessage,
+  isUnanswerablePromptMessage,
   isUsagePolicyErrorMessage,
   makeRefusalGuardError,
   REFUSAL_GUARD_MESSAGE,

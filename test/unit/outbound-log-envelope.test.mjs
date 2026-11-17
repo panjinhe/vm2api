@@ -9,6 +9,7 @@ import { createHandleProtocol } from '../../src/lib/protocol/handle-protocol.mjs
 import { ThinkingOwnerStore } from '../../src/lib/pool/thinking-owner.mjs'
 import { activateFixture, seedEncryptedPackage } from '../fixtures/crag-license.mjs'
 import { CRS_OFFICIAL_CLI_SYSTEM } from '../../src/lib/identity/crs-persona.mjs'
+import { relocateThirdPartySystem } from '../../src/lib/protocol/third-party-system.mjs'
 
 // Unix socket 在 Windows 上不可用，和 go-worker-client.test.mjs 的 unixTest 保持一致。
 const unixTest = process.platform === 'win32' ? test.skip : test
@@ -434,9 +435,12 @@ unixTest('native CRAG receives caller tool names and structured system cache blo
     tool_choice: { type: 'auto' },
   })
   assert.deepEqual(envelope.body.tools, tools)
-  assert.deepEqual(envelope.body.system, system)
+  // Deploy: a third-party caller's system moves to the head of the first user
+  // message (#1208), cache anchors included; the hop sends that shape.
+  const relocated = relocateThirdPartySystem({ system, messages }).body
+  assert.deepEqual(envelope.body.system, relocated.system)
   assert.equal(envelope.body.crag_prompt, undefined)
-  assert.deepEqual(envelope.body.messages, messages)
+  assert.deepEqual(envelope.body.messages, relocated.messages)
   assert.deepEqual(envelope.body.tool_choice, { type: 'auto' })
   assert.equal(envelope.body.max_tokens, 32000)
 })
@@ -470,7 +474,10 @@ unixTest('zero CRAG sends mixed Responses tools and structured system to the cap
   )
   assert.equal(envelope.body.tools.length, 48)
   assert.deepEqual(envelope.body.tools[47], search)
-  assert.deepEqual(envelope.body.system, [{ type: 'text', text: 'Caller policy' }])
+  // Deploy: the caller policy is relocated into the first user message (#1208).
+  assert.equal(JSON.stringify(envelope.body.system).includes('Caller policy'), false)
+  const firstUser = envelope.body.messages.find((message) => message.role === 'user')
+  assert.ok(JSON.stringify(firstUser.content).includes('Caller policy'))
   assert.equal(envelope.body.crag_prompt, undefined)
 })
 
