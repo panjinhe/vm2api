@@ -15,7 +15,7 @@ import {
   migrateScheduleRecord,
 } from '../pool/schedule-state.mjs'
 import { clusterManager } from '../cluster/placement.mjs'
-import { checkCragLicense } from './crag-license.mjs'
+import { checkCragLicense, cragSlotOnUniversalGrant } from './crag-license.mjs'
 import { isValidVmId, withVmLock } from './vm-file.mjs'
 import { ensureHostPrivateDir } from './private-dir.mjs'
 import { getVm, listVms, patchVmRecord, vmHasSchedulableCredential, waitForSlotDrain } from './vm-registry.mjs'
@@ -372,8 +372,15 @@ export async function installKernelTargets({
           const licenseCheck = ops.checkCragLicense || checkCragLicense
           const checkTargetLicense = () => licenseCheck(projectRoot, desired, routing, { preferInstalled: false })
           const grant = target.kernel === 'crag' ? checkTargetLicense() : null
+          // A slot that only inherits the CRAGU1 universal grant reports a payload-key mismatch for a standard
+          // package; it holds no seat of its own, so it may take a fresh host subscription seat instead.
+          const universalMigration = (check) =>
+            check?.code === 'license_payload_key_mismatch' &&
+            !clusterVm &&
+            !ops.checkCragLicense &&
+            cragSlotOnUniversalGrant(projectRoot, desired)
           const canAuthorizeInstall = (check) =>
-            check?.code === 'license_required' &&
+            (check?.code === 'license_required' || universalMigration(check)) &&
             !!(target.expected_tag || target.payload_tag) &&
             !resumeId &&
             typeof cragSubscription?.authorizeInstall === 'function'
@@ -434,7 +441,10 @@ export async function installKernelTargets({
             if (pendingGrant && !pendingGrant.ok) {
               if (!canAuthorizeInstall(pendingGrant)) return installLicenseFailure(target, pendingGrant)
               try {
-                await cragSubscription.authorizeInstall(desired)
+                await cragSubscription.authorizeInstall(
+                  desired,
+                  universalMigration(pendingGrant) ? { allowLegacyReissue: true } : undefined,
+                )
               } catch (error) {
                 const code = error?.code || 'crag_subscription_install_failed'
                 const messages = {

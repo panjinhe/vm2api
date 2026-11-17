@@ -1025,6 +1025,20 @@ export function verifyCragUniversal(code, { publicKey, keyId, now = Math.floor(D
   }
 }
 
+/**
+ * True when this local slot holds no license of its own beyond the installation-wide CRAGU1 grant.
+ * Such a slot can move to a host subscription seat for a package with a different payload key.
+ */
+export function cragSlotOnUniversalGrant(projectRoot, vm) {
+  if (!vm?.id || vm.node_id || isCodexVm(vm)) return false
+  try {
+    const stored = storedRegistration(cragLicenseDirectory(projectRoot, vm))
+    return !stored || stored.startsWith('CRAGU1.')
+  } catch (error) {
+    return error?.code === 'ENOENT'
+  }
+}
+
 function storedRegistration(dir) {
   try {
     return readPrivate(path.join(dir, 'registration.code')).trim()
