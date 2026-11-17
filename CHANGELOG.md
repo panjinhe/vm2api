@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 可选开关 `routing.compatibility.crag_drop_foreign_thinking`（默认关）：CRAG print 发出前丢掉不是本账号签发的 thinking，不再等上游回 `Invalid signature in thinking block` 400 再剥掉重试，也不把一个账号的 thinking 带到另一个账号上游（#1361）。
+
 ## 1.4.165 — 2026-11-20 · 集群 CRAG 更新与出口维护
 
 - `crag-update` 由控制面逐槽更新本机和集群槽，不再在本机探测集群容器。运行槽确认无请求和工具续接后才重启；已停止的槽只更新签名包，断线恢复也不启动（#1348）。
