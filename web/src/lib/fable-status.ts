@@ -116,9 +116,7 @@ export function fableCreditsRequired(
   now = Date.now()
 ): boolean {
   const mark = subject.fable_credits_required as
-    | Record<string, unknown>
-    | null
-    | undefined
+    Record<string, unknown> | null | undefined
   if (!mark) return false
   const until = expiresAtToMs(mark.until)
   return until > now
