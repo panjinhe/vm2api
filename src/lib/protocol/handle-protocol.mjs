@@ -1438,6 +1438,7 @@ export function createHandleProtocol(deps) {
     }
     // Anthropic 400s a subscription request whose system field carries a third-party
     // agent prompt; the same text in the first user message is accepted.
+    let cragRelocated = null
     if (
       !apiOpenAI &&
       inferenceBackend !== 'api' &&
@@ -1446,7 +1447,14 @@ export function createHandleProtocol(deps) {
       !officialTraffic &&
       thirdPartyRelocateEnabled(getRouting())
     ) {
-      ctx.body = relocateThirdPartySystem(ctx.body).body
+      const relocated = relocateThirdPartySystem(ctx.body)
+      if (relocated.moved) {
+        // A CRAG hop sends cragSystem (the caller system without its <cwd>
+        // declaration) instead of personaIn.system. Relocate that projection
+        // too, or the hop would put the third-party prompt back into system.
+        if (hasCragSystem) cragRelocated = relocateThirdPartySystem({ ...ctx.body, system: cragSystem }).body
+        ctx.body = relocated.body
+      }
     }
     const personaIn = ctx.body
     // Capture ownership before rendering supplies gateway markers or projects
@@ -1832,7 +1840,7 @@ export function createHandleProtocol(deps) {
               // CRAG print bypasses the cli-node envelope builder. Canonicalize
               // once more at this boundary so passthrough traffic cannot carry
               // client/OpenAI fields into the native worker.
-              const cragInput = hasCragSystem ? { ...personaIn, system: cragSystem } : personaIn
+              const cragInput = cragRelocated || (hasCragSystem ? { ...personaIn, system: cragSystem } : personaIn)
               const cragStandard = toStandardAnthropicBody(cragInput, {
                 official: officialTraffic === true,
                 rewriteTools: routingNow?.compatibility?.tool_name_rewrite !== false,
