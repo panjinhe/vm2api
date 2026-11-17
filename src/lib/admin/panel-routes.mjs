@@ -3062,7 +3062,8 @@ export function createPanelHandler(ctx) {
           return json(res, selection.status, { ok: false, error: { code: selection.code, message: selection.error } })
         const identity = panelIdentity(req)
         const mayBindSubscription =
-          !req.apiKeyKind && identity.role === 'admin' && !!identity.user && sameOriginPost(req, cfg.base_url)
+          req.apiKeyKind === 'master' ||
+          (!req.apiKeyKind && identity.role === 'admin' && !!identity.user && sameOriginPost(req, cfg.base_url))
         if (!mayBindSubscription && body.targets.some((target) => target.reissue === true)) {
           return json(res, 403, {
             ok: false,
@@ -3639,7 +3640,11 @@ export function createPanelHandler(ctx) {
               },
             })
           }
-          if (online && (req.apiKeyKind || !panelIdentity(req).user || !sameOriginPost(req, cfg.base_url))) {
+          if (
+            online &&
+            req.apiKeyKind !== 'master' &&
+            (req.apiKeyKind || !panelIdentity(req).user || !sameOriginPost(req, cfg.base_url))
+          ) {
             return json(res, 403, {
               ok: false,
               error: { code: 'license_redeem_origin', message: 'Same origin required.' },
@@ -5547,7 +5552,8 @@ export function createPanelHandler(ctx) {
         const id = p.split('/')[4]
         const identity = panelIdentity(req)
         const bindSubscription =
-          !req.apiKeyKind && identity.role === 'admin' && !!identity.user && sameOriginPost(req, cfg.base_url)
+          req.apiKeyKind === 'master' ||
+          (!req.apiKeyKind && identity.role === 'admin' && !!identity.user && sameOriginPost(req, cfg.base_url))
         const started = await withVmLock(path.join(cfg.paths.project, 'vms', `${id}.json`), async () => {
           const result = await powerOnSlot({
             projectRoot: cfg.paths.project,
