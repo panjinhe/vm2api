@@ -1030,7 +1030,7 @@ export function verifyCragUniversal(code, { publicKey, keyId, now = Math.floor(D
  * Such a slot can move to a host subscription seat for a package with a different payload key.
  */
 export function cragSlotOnUniversalGrant(projectRoot, vm) {
-  if (!vm?.id || vm.node_id || isCodexVm(vm)) return false
+  if (!vm?.id || isCodexVm(vm)) return false
   try {
     const stored = storedRegistration(cragLicenseDirectory(projectRoot, vm))
     return !stored || stored.startsWith('CRAGU1.')

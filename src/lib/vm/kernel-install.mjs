@@ -376,7 +376,6 @@ export async function installKernelTargets({
           // package; it holds no seat of its own, so it may take a fresh host subscription seat instead.
           const universalMigration = (check) =>
             check?.code === 'license_payload_key_mismatch' &&
-            !clusterVm &&
             !ops.checkCragLicense &&
             cragSlotOnUniversalGrant(projectRoot, desired)
           const canAuthorizeInstall = (check) =>
