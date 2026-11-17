@@ -1112,7 +1112,8 @@ export class FailoverRunner {
         if (
           policy.reason === 'content_filter_refusal' ||
           policy.reason === 'usage_policy_refusal' ||
-          policy.reason === 'content_policy_refusal'
+          policy.reason === 'content_policy_refusal' ||
+          policy.reason === 'third_party_client'
         ) {
           this.scheduler.markSuccess(selected, { workerStatus: result.workerStatus || null, countUsage })
           bindAll({ accountId: selected.accountId, vmId: selected.vmId })

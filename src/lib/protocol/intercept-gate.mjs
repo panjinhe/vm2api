@@ -2,8 +2,7 @@ import { detectDistill, distillBlockError, isOpenaiPlatformModel } from '../core
 import { redactSecrets } from '../core/security.mjs'
 import {
   ErrorType,
-  isUnanswerablePromptMessage,
-  isUsagePolicyErrorMessage,
+  isThirdPartyClientMessage,
   makeError,
   makeRefusalGuardError,
 } from '../core/errors.mjs'
@@ -421,10 +420,7 @@ export async function evaluateProtocolIntercept({
         fingerprint: match.fingerprint,
         banDevice:
           match.kind !== 'device' &&
-          !(
-            isUnanswerablePromptMessage(match.row?.error_message) &&
-            !isUsagePolicyErrorMessage(match.row?.error_message)
-          ),
+          !isThirdPartyClientMessage(match.row?.error_message),
         reason:
           match.kind === 'device' ? 'refusal_device' : match.kind === 'similar' ? 'refusal_similar' : 'refusal_guard',
       })

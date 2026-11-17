@@ -8,7 +8,7 @@
  */
 import { createHash } from 'node:crypto'
 import {
-  isUnanswerablePromptMessage,
+  isThirdPartyClientMessage,
   isUsagePolicyErrorMessage,
   makeRefusalGuardError,
   REFUSAL_GUARD_MESSAGE,
@@ -213,6 +213,8 @@ export function upstreamRiskReason(result, phrases = []) {
     .filter(Boolean)
     .join('\n')
     .toLowerCase()
+  // Third-party client billed against extra usage: not a refusal, not risk.
+  if (isThirdPartyClientMessage(text)) return ''
   if (status === 400 && isUnanswerablePromptMessage(text) && !isUsagePolicyErrorMessage(text)) {
     return 'upstream:extra_usage_session'
   }
