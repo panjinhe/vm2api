@@ -471,7 +471,14 @@ export async function installKernelTargets({
               resolveKernelDataplane(vm, routing) === 'crag'
             ) {
               phase = 'crag_rollback_unverified'
-              rollback = prepareCragRollback(projectRoot, vm, routing, licenseCheck)
+              // A slot that just moved off the CRAGU1 grant holds a permit for the new payload key only, so
+              // the old package can no longer be verified as a rollback source; keep the operator backups.
+              const migratedOffUniversal = (() => {
+                if (!vm.kernel_installation || vm.kernel_installation.kernel !== 'crag') return false
+                const previous = licenseCheck(projectRoot, vm, routing, { preferInstalled: true })
+                return !previous.ok && previous.code === 'license_payload_key_mismatch'
+              })()
+              rollback = migratedOffUniversal ? null : prepareCragRollback(projectRoot, vm, routing, licenseCheck)
               if (rollback) {
                 patchVmRecord(projectRoot, target.id, (record) => {
                   record.kernel_operation.rollback_package = path.basename(rollback.backup)
