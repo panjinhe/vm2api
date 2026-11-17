@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHandleProtocol } from '../../src/lib/protocol/handle-protocol.mjs'
 import { ThinkingOwnerStore } from '../../src/lib/pool/thinking-owner.mjs'
 import { activateFixture, seedEncryptedPackage } from '../fixtures/crag-license.mjs'
+import { CRS_OFFICIAL_CLI_SYSTEM } from '../../src/lib/identity/crs-persona.mjs'
 
 // Unix socket 在 Windows 上不可用，和 go-worker-client.test.mjs 的 unixTest 保持一致。
 const unixTest = process.platform === 'win32' ? test.skip : test
@@ -319,6 +320,12 @@ const ordinaryHealth = { runtime_variant: 'cli-node', capabilities: [] }
 const trustedCwd = '/synthetic/trusted-workspace'
 const publicCwd = '/synthetic/public-cwd-must-not-win'
 const cwdTag = (cwd) => `<cwd>\n${cwd}\n</cwd>`
+// The public handler relocates a non Claude Code caller's system (these
+// fixtures do not send official Claude Code headers) to the head of the first
+// user message before any hop renders (third-party-system.mjs). CRAG then
+// receives only the official identity line as its caller prompt. A valid <cwd>
+// declaration still becomes caller_cwd and is not relocated with the text.
+const identityPrompt = (mode) => ({ mode, text: CRS_OFFICIAL_CLI_SYSTEM })
 
 async function protocolKernelFixture(t, { health, staleHealth, preset = 'official_full', interceptRules }) {
   const kernel = await fakeKernel({ health })
@@ -542,7 +549,8 @@ for (const stream of [false, true]) {
           }),
         )
         assert.equal(envelope.caller_cwd, trustedCwd)
-        assert.deepEqual(envelope.body.crag_prompt, { mode, text: 'caller guidance' })
+        assert.deepEqual(envelope.body.crag_prompt, identityPrompt(mode))
+        assert.deepEqual(envelope.body.messages[0].content[0], { type: 'text', text: 'caller guidance' })
         assert.equal(envelope.body.crag_model.id, 'claude-haiku-4-5-20251001')
         assert.equal(Object.hasOwn(envelope.body, 'system'), false)
         assert.equal(JSON.stringify(envelope.body).includes(trustedCwd), false)
@@ -567,10 +575,14 @@ for (const stream of [false, true]) {
           }),
         )
         assert.equal(envelope.caller_cwd, trustedCwd)
-        assert.equal(envelope.body.crag_prompt.mode, mode)
-        assert.ok(envelope.body.crag_prompt.text.includes(history))
-        assert.equal(envelope.body.crag_prompt.text.split(trustedCwd).length - 1, 1)
-        assert.ok(extra.outbound_body.crag_prompt.text.includes(history))
+        assert.deepEqual(envelope.body.crag_prompt, identityPrompt(mode))
+        // The declaration leaves with caller_cwd; the lifted history keeps its own copy.
+        assert.deepEqual(
+          envelope.body.messages[0].content.slice(0, 2).map((block) => block.text),
+          ['caller guidance', history],
+        )
+        assert.equal(JSON.stringify(envelope.body).split(trustedCwd).length - 1, 1)
+        assert.deepEqual(extra.outbound_body.messages[0].content[1].text, history)
         assert.equal(Object.hasOwn(envelope.body, 'system'), false)
         assert.equal(
           envelope.body.messages.some((message) => message.role === 'system'),
@@ -622,8 +634,9 @@ for (const stream of [false, true]) {
         assert.equal(Object.hasOwn(envelope.body, 'crag_model'), false)
         assert.equal(extra.official_cc_inference, 'cli-hop')
         assert.equal(Object.hasOwn(extra, 'crag_print'), false)
-        assert.ok(JSON.stringify(envelope.body.system).includes(trustedCwd))
-        assert.ok(JSON.stringify(envelope.body.system).includes('caller guidance'))
+        // cli-node does not extract the declaration: the caller system moves verbatim.
+        assert.equal(envelope.body.messages[0].content[0].text, `${cwdTag(trustedCwd)}\ncaller guidance`)
+        assert.equal(JSON.stringify(envelope.body.system).includes(trustedCwd), false)
       }
       const stableSystem = ({ envelope }) => {
         const [billing, ...system] = envelope.body.system
@@ -674,8 +687,8 @@ for (const stream of [false, true]) {
         assert.equal(extra.official_cc_inference, 'crag-print')
         assert.equal(Object.hasOwn(envelope, 'caller_cwd'), false)
         if (preserved) {
-          assert.equal(envelope.body.crag_prompt.mode, 'append')
-          assert.ok(envelope.body.crag_prompt.text.includes(preserved))
+          assert.deepEqual(envelope.body.crag_prompt, identityPrompt('append'))
+          assert.ok(envelope.body.messages[0].content.some((block) => block.text?.includes(preserved)))
         } else {
           assert.equal(Object.hasOwn(envelope.body, 'crag_prompt'), false)
         }
@@ -700,7 +713,8 @@ for (const phase of ['before_convert', 'before_upstream']) {
     ]) {
       const { envelope } = await fixture.send(body)
       assert.equal(envelope.caller_cwd, expectedCwd)
-      assert.deepEqual(envelope.body.crag_prompt, { mode: 'append', text: replacementText })
+      assert.deepEqual(envelope.body.crag_prompt, identityPrompt('append'))
+      assert.equal(envelope.body.messages[0].content[0].text, replacementText)
     }
   })
 }
