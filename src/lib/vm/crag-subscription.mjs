@@ -4,6 +4,7 @@ import path from 'node:path'
 import {
   activateCragSubscriptionBinding,
   cragLicenseDeniedResult,
+  cragSlotOnUniversalGrant,
   cragTargetIds,
   getCragLicense,
   MAX_CRAG_HOST_ENTITLEMENT_BYTES,
@@ -483,7 +484,11 @@ export function createCragSubscription({
     const options = { preferInstalled: !install }
     const { license } = getCragLicense(projectRoot, vm, options)
     if (license.valid && license.scope !== 'host') return start()
-    if (!license.valid && !((bindSubscription || install) && license.code === 'license_required')) {
+    // An install onto a slot that only inherits the CRAGU1 grant binds a fresh seat (see kernel-install).
+    const unbound = (checked) =>
+      checked.code === 'license_required' ||
+      (install && checked.code === 'license_payload_key_mismatch' && cragSlotOnUniversalGrant(projectRoot, vm))
+    if (!license.valid && !((bindSubscription || install) && unbound(license))) {
       return denyRuntime(license)
     }
     if (admissionWaiters >= 32)
@@ -495,7 +500,7 @@ export function createCragSubscription({
         const rights = readLocalRights()
         if (rights.pending) return runtimeDenial(usageUnverified())
         const checked = getCragLicense(projectRoot, vm, options).license
-        const needsBinding = checked.code === 'license_required' && (bindSubscription || install)
+        const needsBinding = unbound(checked) && (bindSubscription || install)
         if (!checked.valid && !needsBinding) return denyRuntime(checked)
         if (checked.valid && checked.scope !== 'host') return null
         if (!rights.claims && needsBinding) {
