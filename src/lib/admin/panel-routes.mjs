@@ -3061,7 +3061,7 @@ export function createPanelHandler(ctx) {
         }
       }
       // HeyRoute private patch (2026-11-18): several cached releases side by side.
-      if (req.method === 'GET' && p === '/api/panel/kernels/releases') {
+      if (req.method === 'GET' && p === '/api/panel/kernels/cached') {
         const result = listKernelReleases(
           cfg.paths.project,
           new URL(req.url, 'http://x').searchParams.get('kernel') || 'crag',
