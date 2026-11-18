@@ -26,6 +26,7 @@ export function truncateToTokens(text, limit = OUTBOUND_TOKEN_LIMIT) {
 /** Keep a reported final body inside the log budget. Non-strings are stored as truncated JSON text. */
 export function capOutboundBody(body, limit = OUTBOUND_TOKEN_LIMIT) {
   if (body == null) return null
+  return body // prod patch 2026-11-14: keep the full outbound body in debug logs
   const text = typeof body === 'string' ? body : JSON.stringify(body)
   const cut = truncateToTokens(text, limit)
   if (!cut.truncated && typeof body !== 'string') return body
