@@ -99,6 +99,7 @@ import { officialMessagesBody } from './anthropic-messages.mjs'
 import { canReuseCanonicalHistory } from './sanitize.mjs'
 import { hasForeignSystemBlock, relocateThirdPartySystem, thirdPartyRelocateEnabled } from './third-party-system.mjs'
 import { blockedClientError, blockedClientFor } from '../identity/blocked-clients.mjs'
+import { detectThirdPartyClient } from '../identity/third-party-clients.mjs'
 import { prepareOutboundEnvelope, prepareCliHopBody, prepareCliPersonaInput } from './outbound-attempt.mjs'
 import {
   callerCwdDeclaration,
@@ -1509,19 +1510,26 @@ export function createHandleProtocol(deps) {
     // Anthropic 400s a subscription request whose system field carries a third-party
     // agent prompt; the same text in the first user message is accepted.
     let cragRelocated = null
+    // A known third-party client that copies the official CLI's UA/billing block/user_id
+    // still gets relocated: Anthropic keys on the system content, not on those signals.
+    const thirdPartyClient = detectThirdPartyClient(ctx.body)
     if (
       !apiOpenAI &&
       inferenceBackend !== 'api' &&
       !requestContext &&
-      !officialPassthrough &&
-      (!officialTraffic || hasForeignSystemBlock(ctx.body.system)) &&
+      (
+        (!officialPassthrough && (!officialTraffic || hasForeignSystemBlock(ctx.body.system))) ||
+        thirdPartyClient
+      ) &&
       thirdPartyRelocateEnabled(getRouting())
     ) {
       // Official traffic only gets here because the gate found a positively
       // foreign block, so move just that block: the real official envelope has
       // standalone harness/boundary/guidance blocks that the greedy predicate
-      // would strip along with it.
-      const relocated = relocateThirdPartySystem(ctx.body, { onlyForeign: officialTraffic === true })
+      // would strip along with it. A known third-party client posing as
+      // official is relocated greedily and name-scrubbed instead.
+      const onlyForeign = officialTraffic === true && !thirdPartyClient
+      const relocated = relocateThirdPartySystem(ctx.body, { onlyForeign, client: thirdPartyClient })
       if (relocated.moved) {
         // A CRAG hop sends cragSystem (the caller system without its <cwd>
         // declaration) instead of personaIn.system. Relocate that projection
@@ -1529,7 +1537,7 @@ export function createHandleProtocol(deps) {
         if (hasCragSystem)
           cragRelocated = relocateThirdPartySystem(
             { ...ctx.body, system: cragSystem },
-            { onlyForeign: officialTraffic === true },
+            { onlyForeign, client: thirdPartyClient },
           ).body
         ctx.body = relocated.body
       }

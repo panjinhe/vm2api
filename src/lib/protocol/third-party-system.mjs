@@ -49,6 +49,7 @@ function isForeignSystemBlock(block) {
 export function hasForeignSystemBlock(system) {
   return systemBlocks(system).some(isForeignSystemBlock)
 }
+import { scrubClientNames } from '../identity/third-party-clients.mjs'
 
 /** Third-party clients are admitted (and relocated) exactly when claude_code_only is off. */
 export function thirdPartyRelocateEnabled(routing = null) {
@@ -81,21 +82,18 @@ function systemBlocks(system) {
  *   `KNOWN_OFFICIAL_SYSTEM_TEXTS` does not list, so the greedy predicate would
  *   strip the official envelope while removing the appended block.
  */
-function splitSystem(system, { onlyForeign = false } = {}) {
+function splitSystem(system, { onlyForeign = false, client = null } = {}) {
   const move = []
   for (const block of systemBlocks(system)) {
     if (!block || block.type !== 'text' || typeof block.text !== 'string') continue
     if (onlyForeign) {
       if (!isForeignSystemBlock(block)) continue
     } else if (!block.text.trim() || isKnownOfficialSystemText(block.text)) continue
+    const text = scrubClientNames(block.text, client)
     move.push(
       block.cache_control == null
-        ? { type: 'text', text: block.text }
-        : {
-            type: 'text',
-            text: block.text,
-            cache_control: block.cache_control,
-          },
+        ? { type: 'text', text }
+        : { type: 'text', text, cache_control: block.cache_control },
     )
   }
   return move
@@ -112,10 +110,10 @@ function firstUserIndex(messages) {
  *   blocks and leave the official envelope in `system`. See splitSystem.
  * @returns {{ body: object, moved: boolean, blocks: number, chars: number }}
  */
-export function relocateThirdPartySystem(body, { onlyForeign = false } = {}) {
+export function relocateThirdPartySystem(body, { onlyForeign = false, client = null } = {}) {
   const none = { body, moved: false, blocks: 0, chars: 0 }
   if (!body || typeof body !== 'object' || !Array.isArray(body.messages) || !body.messages.length) return none
-  const moved = splitSystem(body.system, { onlyForeign })
+  const moved = splitSystem(body.system, { onlyForeign, client })
   if (!moved.length) return none
   const messages = body.messages.slice()
   const at = firstUserIndex(messages)
