@@ -55,6 +55,23 @@ export const THIRD_PARTY_CLIENTS = Object.freeze([
     markers: [/\bcalled goose\b/i, /\bcreated by Block\b.*\bgoose\b/is],
     names: [[/\bgoose\b/gi, 'the assistant']],
   }),
+  // Seen in production claude-cli-UA traffic, 2026-11-18..21 (system block openings).
+  TP('deepseek-harness', 'DeepSeek Harness', {
+    markers: [/\bpowered by DeepSeek Harness\b/i],
+    names: [[/\bDeepSeek Harness\b/gi, 'the agent harness']],
+  }),
+  TP('pi', 'pi', {
+    markers: [/\brunning inside pi, a coding agent harness\b/i],
+    names: [[/\binside pi, a coding agent harness\b/gi, 'inside a coding agent harness']],
+  }),
+  TP('codex', 'Codex', {
+    markers: [/\bYou are Codex, a coding agent\b/, /# Codex desktop context/, /^<collaboration_mode>/m],
+    names: [[/\bCodex\b/g, 'the assistant']],
+  }),
+  TP('copilot-cli', 'Copilot CLI', {
+    markers: [/^Follow Microsoft content policies\./m],
+    names: [],
+  }),
   TP('cherry', 'Cherry Studio', {
     toolPrefixes: ['mcp__Cherry'],
     names: [[/\bCherry Studio\b/gi, 'the client']],

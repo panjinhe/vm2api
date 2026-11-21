@@ -48,3 +48,15 @@ test('without a client the relocated text is unchanged', () => {
   const r = relocateThirdPartySystem(body)
   assert.match(r.body.messages[0].content[0].text, /OpenCode/)
 })
+
+test('detects clients seen in production traffic', () => {
+  for (const [text, id] of [
+    ['You are an AI agent powered by DeepSeek Harness. You are a coding agent', 'deepseek-harness'],
+    ['You are a coding assistant running inside pi, a coding agent harness.', 'pi'],
+    ['You are Codex, a coding agent. You and the user share the same workspace', 'codex'],
+    ['You are Cline, an AI coding agent. Your primary goal', 'cline'],
+    ['Follow Microsoft content policies. Avoid content that violates copyrights.', 'copilot-cli'],
+  ]) assert.equal(detectThirdPartyClient(spoofed([text]))?.id, id)
+  const r = relocateThirdPartySystem(spoofed(['a coding assistant running inside pi, a coding agent harness.']), { names: [[/\binside pi, a coding agent harness\b/gi, 'inside a coding agent harness']] })
+  assert.doesNotMatch(r.body.messages[0].content[0].text, /inside pi/)
+})
