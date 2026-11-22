@@ -60,3 +60,24 @@ test('detects clients seen in production traffic', () => {
   const r = relocateThirdPartySystem(spoofed(['a coding assistant running inside pi, a coding agent harness.']), { names: [[/\binside pi, a coding agent harness\b/gi, 'inside a coding agent harness']] })
   assert.doesNotMatch(r.body.messages[0].content[0].text, /inside pi/)
 })
+
+import { thirdPartyActionFor, detectThirdPartyClient as _detect } from '../../src/lib/identity/third-party-clients.mjs'
+import { blockedClientFor } from '../../src/lib/identity/blocked-clients.mjs'
+
+test('thirdPartyActionFor: new key wins, legacy blocked_clients maps to block, default relocate', () => {
+  const oc = { id: 'openclaw' }
+  assert.equal(thirdPartyActionFor(oc, {}), 'relocate')
+  assert.equal(thirdPartyActionFor(oc, { compatibility: { blocked_clients: { openclaw: true } } }), 'block')
+  assert.equal(
+    thirdPartyActionFor(oc, { compatibility: { blocked_clients: { openclaw: true }, third_party_clients: { openclaw: 'off' } } }),
+    'off',
+  )
+  assert.equal(thirdPartyActionFor(oc, { compatibility: { third_party_clients: { openclaw: 'bogus' } } }), 'relocate')
+})
+
+test('blockedClientFor only fires on block', () => {
+  const body = { system: 'You are a personal assistant running inside OpenClaw.', messages: [] }
+  assert.equal(blockedClientFor(body, { compatibility: { third_party_clients: { openclaw: 'relocate' } } }), null)
+  assert.equal(blockedClientFor(body, { compatibility: { third_party_clients: { openclaw: 'block' } } })?.id, 'openclaw')
+  assert.equal(blockedClientFor(body, { compatibility: { blocked_clients: { openclaw: true } } })?.id, 'openclaw')
+})

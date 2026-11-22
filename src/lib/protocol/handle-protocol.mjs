@@ -99,7 +99,7 @@ import { officialMessagesBody } from './anthropic-messages.mjs'
 import { canReuseCanonicalHistory } from './sanitize.mjs'
 import { hasForeignSystemBlock, relocateThirdPartySystem, thirdPartyRelocateEnabled } from './third-party-system.mjs'
 import { blockedClientError, blockedClientFor } from '../identity/blocked-clients.mjs'
-import { detectThirdPartyClient } from '../identity/third-party-clients.mjs'
+import { detectThirdPartyClient, thirdPartyActionFor } from '../identity/third-party-clients.mjs'
 import { prepareOutboundEnvelope, prepareCliHopBody, prepareCliPersonaInput } from './outbound-attempt.mjs'
 import {
   callerCwdDeclaration,
@@ -1512,7 +1512,9 @@ export function createHandleProtocol(deps) {
     let cragRelocated = null
     // A known third-party client that copies the official CLI's UA/billing block/user_id
     // still gets relocated: Anthropic keys on the system content, not on those signals.
-    const thirdPartyClient = detectThirdPartyClient(ctx.body)
+    const detectedClient = detectThirdPartyClient(ctx.body)
+    const thirdPartyClient =
+      detectedClient && thirdPartyActionFor(detectedClient, getRouting()) === 'relocate' ? detectedClient : null
     if (
       !apiOpenAI &&
       inferenceBackend !== 'api' &&

@@ -111,3 +111,24 @@ export function scrubClientNames(text, client) {
   for (const [re, replacement] of client.names) out = out.replace(re, replacement)
   return out
 }
+
+export const THIRD_PARTY_ACTIONS = Object.freeze(['off', 'relocate', 'block'])
+
+const CLIENT_ID_SET = new Set(THIRD_PARTY_CLIENTS.map((client) => client.id))
+
+export function isThirdPartyClientId(id) {
+  return CLIENT_ID_SET.has(id)
+}
+
+/**
+ * What to do with a detected client: routing.compatibility.third_party_clients.<id>
+ * is off (forward as is) / relocate (system moved + name scrubbed) / block (403).
+ * Unset falls back to the legacy blocked_clients switch (true => block), else relocate.
+ */
+export function thirdPartyActionFor(client, routing) {
+  if (!client) return 'off'
+  const compat = routing?.compatibility
+  const value = compat?.third_party_clients?.[client.id]
+  if (THIRD_PARTY_ACTIONS.includes(value)) return value
+  return compat?.blocked_clients?.[client.id] === true ? 'block' : 'relocate'
+}

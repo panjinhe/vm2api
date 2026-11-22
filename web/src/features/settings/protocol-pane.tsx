@@ -9,8 +9,10 @@ import {
   Clock3,
   Database,
   Scaling,
+  ChevronRight,
   ShieldCheck,
 } from 'lucide-react'
+import { useState } from 'react'
 import {
   cacheTtlFromCompat,
   detectProxiedOfficialCcFromCompat,
@@ -30,10 +32,123 @@ import { ChipGroup, PaneSection, StepperSetting } from './scheduler-controls'
 
 type Block = Record<string, unknown>
 
-/** Mirrors BLOCKABLE_CLIENTS in src/lib/identity/blocked-clients.mjs. */
-const BLOCKABLE_CLIENTS: [string, string, string][] = [
-  ['openclaw', 'OpenClaw', 'system 自述 OpenClaw 或带 mcp__openclaw__ 工具'],
+type ClientAction = 'off' | 'relocate' | 'block'
+
+/** Mirrors THIRD_PARTY_CLIENTS in src/lib/identity/third-party-clients.mjs. */
+const THIRD_PARTY_CLIENTS: [string, string][] = [
+  ['openclaw', 'OpenClaw'],
+  ['opencode', 'OpenCode'],
+  ['cline', 'Cline'],
+  ['roo', 'Roo Code'],
+  ['kilo', 'Kilo Code'],
+  ['crush', 'Crush'],
+  ['goose', 'goose'],
+  ['deepseek-harness', 'DeepSeek Harness'],
+  ['pi', 'pi'],
+  ['codex', 'Codex'],
+  ['copilot-cli', 'Copilot CLI'],
+  ['cherry', 'Cherry Studio'],
 ]
+
+const CLIENT_ACTIONS: [ClientAction, string][] = [
+  ['off', '放行'],
+  ['relocate', '搬迁'],
+  ['block', '拦截'],
+]
+
+/** Unset falls back to the legacy blocked_clients switch, else relocate. */
+function clientActionOf(
+  id: string,
+  map: Record<string, unknown>,
+  legacy: Record<string, unknown>
+): ClientAction {
+  const v = map[id]
+  if (v === 'off' || v === 'relocate' || v === 'block') return v
+  return legacy[id] === true ? 'block' : 'relocate'
+}
+
+function ThirdPartyClients({
+  compat,
+  onCompatChange,
+}: {
+  compat: Block
+  onCompatChange: (next: Block) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const asMap = (v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? (v as Record<string, unknown>)
+      : {}
+  const map = asMap(compat.third_party_clients)
+  const legacy = asMap(compat.blocked_clients)
+  const actions = THIRD_PARTY_CLIENTS.map(([id, label]) => ({
+    id,
+    label,
+    action: clientActionOf(id, map, legacy),
+  }))
+  const count = (a: ClientAction) => actions.filter((x) => x.action === a).length
+  const set = (id: string, action: ClientAction) => {
+    // Persist every row explicitly and drop the legacy key: it is merged in here.
+    const next: Record<string, ClientAction> = {}
+    for (const x of actions) next[x.id] = x.id === id ? action : x.action
+    const { blocked_clients: _legacy, ...rest } = compat
+    onCompatChange({ ...rest, third_party_clients: next })
+  }
+  return (
+    <div className='py-3 first:pt-0 last:pb-0'>
+      <button
+        type='button'
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className='flex w-full items-center gap-2 text-start'
+      >
+        <ChevronRight
+          className={cn('size-4 shrink-0 transition-transform', open && 'rotate-90')}
+          aria-hidden
+        />
+        <span className='text-sm font-medium'>第三方客户端</span>
+        <span className='ms-auto text-xs text-muted-foreground'>
+          搬迁 {count('relocate')} · 拦截 {count('block')} · 放行 {count('off')}
+        </span>
+      </button>
+      {open ? (
+        <div className='mt-2 space-y-1 ps-6'>
+          {actions.map(({ id, label, action }) => (
+            <div key={id} className='flex items-center justify-between gap-3 py-1'>
+              <span className='text-sm'>{label}</span>
+              <div className='inline-flex rounded-md border p-0.5 text-xs' role='radiogroup' aria-label={label}>
+                {CLIENT_ACTIONS.map(([value, text]) => (
+                  <button
+                    key={value}
+                    type='button'
+                    role='radio'
+                    aria-checked={action === value}
+                    onClick={() => set(id, value)}
+                    className={cn(
+                      'rounded px-2.5 py-0.5 transition-colors',
+                      action === value
+                        ? value === 'block'
+                          ? 'bg-destructive/15 text-destructive'
+                          : value === 'relocate'
+                            ? 'bg-primary/15 text-primary'
+                            : 'bg-muted text-foreground'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    {text}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          <p className='pt-1 text-xs text-muted-foreground'>
+            放行＝原样转发；搬迁＝system 移入首条消息并替换客户端名；拦截＝403，不选号。
+          </p>
+        </div>
+      ) : null}
+    </div>
+  )
+}
 
 /** Mirrors `hasClaudeCodeClientHeaders` + body checks in src/lib/identity/claude-code-only.mjs. */
 const CLAUDE_CODE_FINGERPRINT: [string, string][] = [
@@ -67,12 +182,6 @@ export function ProtocolPane({
   const strict = compat.claude_code_only === true
   const relay = detectProxiedOfficialCcFromCompat(compat)
   const cch = cchEnabledFromCompat(compat)
-  const blockedClients =
-    compat.blocked_clients &&
-    typeof compat.blocked_clients === 'object' &&
-    !Array.isArray(compat.blocked_clients)
-      ? (compat.blocked_clients as Record<string, unknown>)
-      : {}
   return (
     <div className='space-y-4'>
       <PaneSection
@@ -134,31 +243,7 @@ export function ProtocolPane({
               aria-label='官方 Claude Code 家族透传'
             />
           </SettingRow>
-          {BLOCKABLE_CLIENTS.map(([id, label, signature]) => {
-            const on = blockedClients[id] === true
-            return (
-              <SettingRow
-                key={id}
-                label={`拦截 ${label}`}
-                desc={
-                  on
-                    ? `开：识别为 ${label}（${signature}）的 Claude 请求一律 403，不选号、不上游。与上面的开关无关。`
-                    : `已关：${label} 按普通请求放行。它借官方 CLI 发请求，会被上游认成第三方应用而 400。`
-                }
-              >
-                <Switch
-                  checked={on}
-                  onCheckedChange={(next) =>
-                    onCompatChange({
-                      ...compat,
-                      blocked_clients: { ...blockedClients, [id]: next },
-                    })
-                  }
-                  aria-label={`拦截 ${label}`}
-                />
-              </SettingRow>
-            )
-          })}
+          <ThirdPartyClients compat={compat} onCompatChange={onCompatChange} />
         </div>
         <div
           className={cn(

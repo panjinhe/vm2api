@@ -14,6 +14,7 @@
  */
 import { makeError, ErrorType, ErrorCode } from '../core/errors.mjs'
 import { eachSystemText } from './crs-persona.mjs'
+import { detectThirdPartyClient, thirdPartyActionFor } from './third-party-clients.mjs'
 
 // OpenClaw (github.com/openclaw/openclaw) as captured 2026-11-20 via claude-cli 2.1.281.
 const OPENCLAW_SYSTEM_MARKERS = [
@@ -75,12 +76,10 @@ export function detectBlockableClient(body = {}) {
   return null
 }
 
-/** The blocked client this request comes from under the current routing, or null. */
+/** The client to reject (action `block` under the current routing), or null. */
 export function blockedClientFor(body, routing) {
-  const on = blockedClientsFromRouting(routing)
-  if (!on.length) return null
-  const client = detectBlockableClient(body)
-  return client && on.includes(client.id) ? client : null
+  const client = detectThirdPartyClient(body)
+  return client && thirdPartyActionFor(client, routing) === 'block' ? client : null
 }
 
 export function blockedClientError(client) {
