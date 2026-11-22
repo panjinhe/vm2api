@@ -957,6 +957,16 @@ export class FailoverRunner {
       homeRetryPending = 'slot_busy'
       return true
     }
+    // x-kin-queue: off — the home kernel being full is the pool being full for this
+    // conversation: answer 529 now rather than wait for the slot.
+    const homeSlotRefused = (unit, policy) => {
+      if (allowQueue || !isHome(unit) || policy?.reason !== 'slot_busy') return null
+      releaseStickySlots()
+      return {
+        ...poolOverloadedError({ reason: 'session_home_slot_busy', attempt_count: budget.hops }),
+        ...attribution(),
+      }
+    }
     const keptHome = () => {
       releaseStickySlots()
       return preferLastResult(lastResult, lastPolicy, null, { ...attribution(), session_home_kept: true })
@@ -1347,6 +1357,8 @@ export class FailoverRunner {
           this.retireOutboundSession(selected, bindKeys)
           freshSlot = true
         }
+        const refusedHome = homeSlotRefused(selected, policy)
+        if (refusedHome) return refusedHome
         if (budget.allowSameUnit(selected.accountId, policy, hopMs, this.config.same_account_retry_max_hop_ms)) {
           budget.noteSameUnit(selected.accountId)
           avoid = retryOrStay(selected)
@@ -1473,6 +1485,8 @@ export class FailoverRunner {
         }
         policy = await this.recoverCredential(selected, policy)
         const hopMs = Date.now() - attemptStarted
+        const refusedHome = homeSlotRefused(selected, policy)
+        if (refusedHome) return refusedHome
         if (budget.allowSameUnit(selected.accountId, policy, hopMs, this.config.same_account_retry_max_hop_ms)) {
           budget.noteSameUnit(selected.accountId)
           avoid = retryOrStay(selected)

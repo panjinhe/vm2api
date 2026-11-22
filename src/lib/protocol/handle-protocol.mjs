@@ -1796,7 +1796,6 @@ export function createHandleProtocol(deps) {
     // stream:false only changes the client response shape (assembled JSON).
     const deliveryMode = requestedDelivery === 'verified' ? 'verified' : 'realtime'
     const allowQueue = queueAllowedByHeaders(req.headers)
-    if (!allowQueue) logBag.queue = 'off'
     // A master-key pin is panel test-chat / diagnostics (manage). Everything else is dispatch.
     const ownerScope = panelDiagnostics ? { type: 'any' } : ownerScopeFromRequest(req, apiKeyStore?.users)
     // Cache bypass is a client hint; only authenticated master-key probes may skip accounting.
