@@ -57,7 +57,7 @@ test('detects clients seen in production traffic', () => {
     ['You are Cline, an AI coding agent. Your primary goal', 'cline'],
     ['Follow Microsoft content policies. Avoid content that violates copyrights.', 'copilot-cli'],
   ]) assert.equal(detectThirdPartyClient(spoofed([text]))?.id, id)
-  const r = relocateThirdPartySystem(spoofed(['a coding assistant running inside pi, a coding agent harness.']), { names: [[/\binside pi, a coding agent harness\b/gi, 'inside a coding agent harness']] })
+  const r = relocateThirdPartySystem(spoofed(['a coding assistant running inside pi, a coding agent harness.']), { client: { names: [[/\binside pi, a coding agent harness\b/gi, 'inside a coding agent harness']] } })
   assert.doesNotMatch(r.body.messages[0].content[0].text, /inside pi/)
 })
 
