@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  CACHE_NEUTRAL_REPAIRS,
   CREDENTIAL_ENSURE_COOLDOWN_MS,
   classifyUpstreamResult,
   repairAnthropicRequest,
@@ -989,4 +990,66 @@ test('fatal credential ensure escalation stays on permanent oauth_revoked', () =
   assert.notEqual(policy.reason, 'credential_refresh_failed')
   assert.equal(policy.cooldownUntil, Number.MAX_SAFE_INTEGER)
   assert.equal(shouldContinue(policy), true)
+})
+
+test('a CRAG tool continuation conflict repairs once into a read-only tail', () => {
+  for (const [status, message] of [
+    [409, 'tool_result replayed'],
+    [400, 'tool_result replayed'],
+    [409, 'tool_result history mismatch'],
+    [410, 'tool continuation expired'],
+  ]) {
+    const result = { status, body: { error: { type: 'invalid_request_error', message } } }
+    const policy = classifyUpstreamResult(result)
+    assert.equal(policy.action, 'repair-and-retry', message)
+    assert.equal(policy.reason, 'tool_continuation_repairable')
+    assert.equal(policy.retrySameAccount, true)
+    assert.equal(policy.cooldownUntil, null)
+    assert.equal(CACHE_NEUTRAL_REPAIRS.has(policy.reason), true)
+    // Second refusal after the repair is the real answer.
+    assert.equal(classifyUpstreamResult(result, { repaired: true }).action, 'stop')
+    // Something already reached the caller: never run the turn twice.
+    assert.equal(classifyUpstreamResult({ ...result, committed: true }).action, 'stop')
+  }
+})
+
+test('tool continuation repair rewrites only the last user message', () => {
+  const history = [
+    { role: 'user', content: [{ type: 'text', text: 'run ls', cache_control: { type: 'ephemeral' } }] },
+    {
+      role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 't', signature: 'sig' },
+        { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } },
+      ],
+    },
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_1',
+          content: 'a.txt',
+          is_error: false,
+          cache_control: { type: 'ephemeral' },
+        },
+        { type: 'text', text: 'and now?' },
+      ],
+    },
+  ]
+  const body = { model: 'claude-opus-5-5', thinking: { type: 'adaptive' }, messages: history }
+  const repaired = repairAnthropicRequest(body, { action: 'repair-and-retry', reason: 'tool_continuation_repairable' })
+  assert.deepEqual(repaired.thinking, body.thinking)
+  assert.equal(repaired.messages[0], history[0])
+  assert.equal(repaired.messages[1], history[1])
+  assert.deepEqual(repaired.messages[2].content, [
+    { type: 'text', text: '[tool result toolu_1]', cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: 'a.txt' },
+    { type: 'text', text: 'and now?' },
+  ])
+  // Idempotent: the runner and the assembler may both apply it.
+  assert.deepEqual(
+    repairAnthropicRequest(repaired, { action: 'repair-and-retry', reason: 'tool_continuation_repairable' }),
+    repaired,
+  )
 })

@@ -8,6 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { normalizeCragKernelVersion, normalizeKernelDataplane, normalizeSlotPersonaPreset } from '../vm/slot-engine.mjs'
+import { readOnlyTailToolResults } from './tool-result-readonly.mjs'
 /**
  * Print is the CRAG v2 worker only. A live health report wins, then an
  * explicit dataplane on the VM, then the kernel.json that worker was started
@@ -203,26 +204,6 @@ export function cragPromptTooLarge(bytes) {
   return error
 }
 
-function readOnlySummaryResults(messages) {
-  if (!Array.isArray(messages)) return messages
-  const index = messages.findLastIndex((message) => message?.role === 'user')
-  const message = messages[index]
-  if (!Array.isArray(message?.content) || !message.content.some((block) => block?.type === 'tool_result'))
-    return messages
-  // A summary fork observes these results; sending their IDs as live results
-  // would claim the parent's CRAG continuation, regardless of the new session ID.
-  const content = message.content.flatMap((block) => {
-    if (block?.type !== 'tool_result') return [block]
-    const label = { type: 'text', text: `[tool result ${block.tool_use_id}${block.is_error ? ' (error)' : ''}]` }
-    if (block.cache_control) label.cache_control = block.cache_control
-    const result = typeof block.content === 'string' ? [{ type: 'text', text: block.content }] : block.content || []
-    return [label, ...result]
-  })
-  const out = messages.slice()
-  out[index] = { ...message, content }
-  return out
-}
-
 /**
  * @param {object} body caller body, before cli-node persona injection
  * @param {{ preset?: 'official_full' | 'zero', officialPassthrough?: boolean, capabilities?: string[], agentSummary?: boolean }} [options]
@@ -232,7 +213,9 @@ export function prepareCragPrintBody(
   { preset = 'official_full', officialPassthrough = false, capabilities, agentSummary = false } = {},
 ) {
   const out = { ...(body || {}) }
-  if (agentSummary) out.messages = readOnlySummaryResults(out.messages)
+  // A summary fork observes these results; sending their IDs as live results
+  // would claim the parent's CRAG continuation, regardless of the new session ID.
+  if (agentSummary) out.messages = readOnlyTailToolResults(out.messages)
   const mode = preset === 'zero' ? 'replace' : 'append'
   delete out.system
   stripCallerPromptAlias(out)

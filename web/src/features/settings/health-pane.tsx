@@ -11,6 +11,7 @@ import {
   type HealthSnapshotView,
 } from '@/features/settings/queries'
 import { settleInt, typingInt } from './int-input'
+import { ProbeLibraryCard } from './probe-library-card'
 
 type Obj = Record<string, unknown>
 
@@ -215,6 +216,12 @@ export function HealthPane(props: HealthPaneProps) {
         real={real}
         onProbeChange={setProbe}
         onRealChange={setReal}
+      />
+      <ProbeLibraryCard
+        library={obj(probe.library)}
+        onChange={(patch) =>
+          setProbe({ library: { ...obj(probe.library), ...patch } })
+        }
       />
       <SignatureRepairCard failover={failover} onChange={onFailoverChange} />
     </>

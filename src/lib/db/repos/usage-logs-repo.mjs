@@ -1125,7 +1125,7 @@ export class UsageLogsRepo {
            SUM(CASE WHEN ${block} THEN 1 ELSE 0 END) AS blocked,
            SUM(CASE WHEN ${inference}
                      AND NOT ${block}
-                     AND COALESCE(via, '') != 'warmup-intercept'
+                     AND COALESCE(via, '') NOT IN ('warmup-intercept', 'probe-cache')
                 THEN 1 ELSE 0 END) AS passed
          FROM usage_logs
          WHERE created_at >= ?`,
@@ -1153,7 +1153,7 @@ export class UsageLogsRepo {
          WHERE created_at >= ?
            AND (
              ${block}
-             OR (${inference} AND COALESCE(via, '') != 'warmup-intercept')
+             OR (${inference} AND COALESCE(via, '') NOT IN ('warmup-intercept', 'probe-cache'))
            )
          GROUP BY intercept, via, error_message, blocked`,
       )

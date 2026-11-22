@@ -2122,3 +2122,76 @@ test('a slot that cannot refresh its credential hops and cools down', async () =
   assert.equal(scheduler.cooldowns[0].update.reason, 'credential_refresh_failed')
   assert.equal(scheduler.cooldowns[0].update.status, 'cooldown')
 })
+
+test('a CRAG tool continuation conflict retries once on the same seat with a read-only tail', async () => {
+  const scheduler = new Scheduler([candidate(1), candidate(2)])
+  const runner = new FailoverRunner({ scheduler, config: { same_account_retry_delay_ms: 0 } })
+  const seen = []
+  const tail = {
+    role: 'user',
+    content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.txt' }],
+  }
+  const history = [
+    { role: 'user', content: [{ type: 'text', text: 'run ls' }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} }] },
+  ]
+  const result = await runner.run({
+    requestId: 'req-tool-replayed',
+    canonicalBody: { model: 'claude-opus-test', messages: [...history, tail] },
+    model: 'claude-opus-test',
+    applyAttempt: (body, selected, extra) => {
+      seen.push({ vmId: selected.vmId, repaired: extra.repaired, repairs: extra.repairs, tail: body.messages.at(-1) })
+      return { body, meta: {} }
+    },
+    callAttempt: () =>
+      seen.length === 1
+        ? {
+            ok: false,
+            status: 409,
+            terminalState: 'rejected',
+            body: { error: { type: 'invalid_request_error', message: 'tool_result replayed' } },
+          }
+        : success(),
+  })
+  assert.equal(result.ok, true)
+  assert.equal(seen.length, 2)
+  assert.deepEqual(
+    seen.map((entry) => entry.vmId),
+    ['vm-01', 'vm-01'],
+  )
+  // Cache-neutral: the assembler keeps the first-hop outbound shape.
+  assert.equal(seen[1].repaired, false)
+  assert.deepEqual(seen[1].repairs, [{ action: 'repair-and-retry', reason: 'tool_continuation_repairable' }])
+  assert.deepEqual(seen[1].tail.content, [
+    { type: 'text', text: '[tool result toolu_1]' },
+    { type: 'text', text: 'a.txt' },
+  ])
+  assert.equal(scheduler.cooldowns.length, 0)
+})
+
+test('a second tool continuation conflict returns the original refusal', async () => {
+  const scheduler = new Scheduler([candidate(1), candidate(2)])
+  const runner = new FailoverRunner({ scheduler, config: { same_account_retry_delay_ms: 0 } })
+  let calls = 0
+  const result = await runner.run({
+    requestId: 'req-tool-replayed-twice',
+    canonicalBody: {
+      model: 'claude-opus-test',
+      messages: [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'x' }] }],
+    },
+    model: 'claude-opus-test',
+    applyAttempt: (body) => ({ body, meta: {} }),
+    callAttempt: () => {
+      calls++
+      return {
+        ok: false,
+        status: 409,
+        terminalState: 'rejected',
+        body: { error: { type: 'invalid_request_error', message: 'tool_result replayed' } },
+      }
+    },
+  })
+  assert.equal(calls, 2)
+  assert.equal(result.status, 409)
+  assert.equal(result.policy.reason, 'http_409')
+})

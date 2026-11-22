@@ -37,6 +37,8 @@ import { createCatalogMonitor } from './lib/admin/catalog-monitor.mjs'
 import { normalizeOfficialCcConfig } from './lib/oauth/official-cc-bootstrap.mjs'
 import { invalidateLiveCredentialCache } from './lib/admin/panel-live-credentials.mjs'
 import { normalizeHealthProbeConfig, createHealthProbeMonitor, HEALTH_REAL_HEADER } from './lib/admin/health-probe.mjs'
+import { createProbeLibrary } from './lib/admin/probe-library.mjs'
+import { ProbeLibraryRepo } from './lib/db/repos/probe-library-repo.mjs'
 import { normalizeNotifyConfig, createNotifyMonitor } from './lib/admin/notify.mjs'
 import { snapshotVmConnectivity } from './lib/admin/vm-connectivity.mjs'
 import { runVmTestChat } from './lib/admin/vm-test-chat.mjs'
@@ -454,6 +456,7 @@ function attachSlotRuntime(vm) {
 
 healthMonitor = createHealthProbeMonitor({
   config: routingConfig.health_probe,
+  probeLibrary: createProbeLibrary({ repo: new ProbeLibraryRepo(), config: routingConfig.health_probe }),
   listTargets: () => listVms(cfg.paths.project).map(attachSlotRuntime),
   runChat: (vm, real) =>
     runVmTestChat({

@@ -136,3 +136,44 @@ export function outboundProfileQueryOptions() {
       api<{ profile: OutboundProfile }>('/api/panel/outbound-profile'),
   })
 }
+
+/** `GET /api/panel/probe-library` → `src/lib/admin/probe-library.mjs`. */
+export type ProbeLibraryEntry = {
+  fingerprint: string
+  status: 'candidate' | 'active' | 'blocked'
+  model_family: string
+  max_tokens: number
+  sample_text: string
+  distinct_keys: number
+  reply_text: string
+  response_at: string | null
+  fresh: boolean
+  last_error: string | null
+  hit_count: number
+  dry_hit_count: number
+  upstream_count: number
+  first_seen: string
+  last_seen: string
+}
+
+export type ProbeLibraryPayload = {
+  config: Record<string, unknown> | null
+  stats: {
+    entries: number
+    candidate: number
+    active: number
+    blocked: number
+    hits: number
+    dry_hits: number
+    upstream: number
+  } | null
+  entries: ProbeLibraryEntry[]
+}
+
+export function probeLibraryQueryOptions() {
+  return queryOptions({
+    queryKey: ['panel', 'probe-library'] as const,
+    queryFn: () => api<ProbeLibraryPayload>('/api/panel/probe-library'),
+    refetchInterval: 30_000,
+  })
+}

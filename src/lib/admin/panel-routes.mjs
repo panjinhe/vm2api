@@ -5525,6 +5525,37 @@ export function createPanelHandler(ctx) {
           }),
         )
       }
+      if (req.method === 'GET' && p === '/api/panel/probe-library') {
+        const lib = ctx.healthMonitor?.probeLibrary
+        return json(
+          res,
+          200,
+          panel.ok({
+            config: lib?.getConfig?.() || null,
+            stats: lib?.stats?.() || null,
+            entries: lib?.list?.() || [],
+          }),
+        )
+      }
+      if (req.method === 'POST' && p.startsWith('/api/panel/probe-library/')) {
+        const lib = ctx.healthMonitor?.probeLibrary
+        if (!lib) {
+          return json(res, 404, {
+            ok: false,
+            error: { code: 'probe_library_unavailable', message: 'probe library unavailable' },
+          })
+        }
+        const fingerprint = decodeURIComponent(p.slice('/api/panel/probe-library/'.length))
+        const body = await readBody(req, 16 * 1024).catch(() => ({}))
+        const result = lib.act(fingerprint, String(body?.action || ''))
+        if (!result.ok) {
+          return json(res, result.code === 'not_found' ? 404 : 400, {
+            ok: false,
+            error: { code: result.code, message: result.code },
+          })
+        }
+        return json(res, 200, panel.ok({ entry: result.entry || null }))
+      }
       if (req.method === 'GET' && p === '/api/panel/usage-probe') {
         return json(
           res,

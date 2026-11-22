@@ -60,6 +60,7 @@ import {
   formatHealthSse,
   healthUnavailableError,
 } from '../admin/health-probe.mjs'
+import { PROBE_VIA_CACHE } from '../admin/probe-library.mjs'
 import { resolveInferenceBackend, runApiInference, validateApiOpenAIRequest } from '../pool/api-protocol.mjs'
 import { classifyClaudeRequestPurpose, prepareClassifierBody, classifierRequestSummary } from './request-purpose.mjs'
 import { agentSummarySession } from './agent-summary.mjs'
@@ -966,6 +967,58 @@ export function createHandleProtocol(deps) {
           return res.end()
         }
         return json(res, 200, mock)
+      }
+    }
+    // Probe library: replay a learned third-party probe before any slot, seat or session is taken.
+    // Claude pool only; Codex and API-endpoint traffic keep their own paths.
+    let probeLearn = null
+    const probeLibrary = getHealthMonitor()?.probeLibrary
+    if (
+      probeLibrary &&
+      platform.platform !== 'openai' &&
+      inferenceBackend !== 'api' &&
+      !panelDiagnostics &&
+      // A fleet with no schedulable credential must not look healthy through old replies.
+      getHealthMonitor()?.rawSnapshot?.('anthropic')?.error !== 'no_schedulable_credential'
+    ) {
+      const probe = probeLibrary.lookup({ headers: req.headers, body: inbound, protocol })
+      if (probe.action === 'learn') probeLearn = probe.fingerprint
+      if (probe.action === 'replay') {
+        const managedKey = req.apiKeyRecord || null
+        if (managedKey) {
+          // Same quota / RPM gate as a real request; nothing stays in flight.
+          const gate = apiKeyStore.acquire(managedKey)
+          if (!gate.ok) {
+            stats.errors++
+            logBag.error_code = gate.code
+            logBag.error_message = gate.message
+            return json(res, gate.status, keyGateErrorBody(gate))
+          }
+          apiKeyStore.release(managedKey)
+        }
+        const hpCfg = { ...(getHealthMonitor().getConfig?.() || DEFAULT_HEALTH_PROBE), cache_model: '' }
+        const snapshot = { body: probe.message, model: probe.message?.model || null }
+        const cached = synthesizeProtocolResponse(protocol, inbound, snapshot, hpCfg)
+        if (cached) {
+          stats.requests++
+          stats.by_route[protocol] = (stats.by_route[protocol] || 0) + 1
+          logBag.via = PROBE_VIA_CACHE
+          logBag.attempt_count = 0
+          logBag.usage = probe.billUsage || probe.message.usage || { input_tokens: 0, output_tokens: 0 }
+          logBag.stop_reason = probe.message.stop_reason || 'end_turn'
+          logBag.final_state = PROBE_VIA_CACHE
+          attachPricing(logBag, {
+            managedKey,
+            rateMultiplier: deps.groupsRepo.rateMultiplier(managedKey?.group_id ?? 1),
+            bill: !!managedKey,
+          })
+          if (isClientStream(inbound, req.headers)) {
+            writeSSEHeaders(res)
+            res.write(formatHealthSse(protocol, inbound, snapshot, hpCfg))
+            return res.end()
+          }
+          return json(res, 200, cached)
+        }
       }
     }
     const earlyBodyCtx = createRequestBodyContext(ctx.body)
@@ -2144,6 +2197,19 @@ export function createHandleProtocol(deps) {
       requestedSpeed: wantsFastMode(ctx.body) ? 'fast' : null,
     })
     logBag.upstream_model = result?.body?.model || result?.model || null
+    if (probeLearn) {
+      const probeOk = !!result?.ok && !isIncompleteAssistantMessage(result)
+      try {
+        probeLibrary?.observe(probeLearn, {
+          keyId: managedKey?.id != null ? `key:${managedKey.id}` : req.apiKeyKind || '',
+          ok: probeOk,
+          body: probeOk ? hidePersonaUsageOnMessage(result.body, personaHideTokens, cacheTtl) : null,
+          billUsage: logBag.usage,
+          error: result?.body?.error?.message || result?.finalState || null,
+          sample: inbound,
+        })
+      } catch {}
+    }
     // Kernel stream firstTokenAt is generated content; include admission/setup via t0.
     logBag.first_token_ms = Number.isFinite(result?.firstTokenAt)
       ? Math.max(0, result.firstTokenAt - logCtx.t0)

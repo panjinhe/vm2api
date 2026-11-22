@@ -59,7 +59,40 @@ export const DEFAULT_HEALTH_PROBE = Object.freeze({
     // sub2api account test: CC banner system + "hi" + 1024 + temperature 1.
     sub2api_account_test: true,
   }),
+  // Per-fingerprint probe library: short probe-shaped requests are learned from live
+  // traffic and replayed once enough distinct keys sent the same one.
+  library: Object.freeze({
+    enabled: false,
+    // Learn and count would-be hits, but always go upstream.
+    dry_run: false,
+    max_prompt_chars: 64,
+    max_system_chars: 0,
+    max_tokens: 64,
+    promote_min_keys: 3,
+    ttl_sec: 21600,
+    refresh_sec: 1800,
+    max_entries: 2000,
+  }),
 })
+
+export function normalizeProbeLibraryConfig(raw = {}) {
+  const src = raw && typeof raw === 'object' ? raw : {}
+  const d = DEFAULT_HEALTH_PROBE.library
+  const ttl = clampInt(src.ttl_sec, 60, 7 * 86400, d.ttl_sec)
+  const maxSystem = Number(src.max_system_chars)
+  return {
+    enabled: asBool(src.enabled, d.enabled),
+    dry_run: asBool(src.dry_run, d.dry_run),
+    max_prompt_chars: clampInt(src.max_prompt_chars, 1, 512, d.max_prompt_chars),
+    max_system_chars:
+      Number.isFinite(maxSystem) && maxSystem >= 0 ? Math.min(4096, Math.round(maxSystem)) : d.max_system_chars,
+    max_tokens: clampInt(src.max_tokens, 1, 1024, d.max_tokens),
+    promote_min_keys: clampInt(src.promote_min_keys, 1, 50, d.promote_min_keys),
+    ttl_sec: ttl,
+    refresh_sec: Math.min(ttl, clampInt(src.refresh_sec, 30, 7 * 86400, d.refresh_sec)),
+    max_entries: clampInt(src.max_entries, 10, 100000, d.max_entries),
+  }
+}
 
 function clampInt(value, min, max, fallback) {
   const n = Number(value)
@@ -96,7 +129,7 @@ function normalizeVmIds(input) {
   return [...new Set(input.map((id) => String(id || '').trim()).filter(isValidVmId))]
 }
 
-function normalizeModelId(id) {
+export function normalizeModelId(id) {
   return String(id || '')
     .toLowerCase()
     .split('[')[0]
@@ -194,6 +227,7 @@ export function normalizeHealthProbeConfig(raw = {}) {
         .trim()
         .slice(0, 200),
     },
+    library: normalizeProbeLibraryConfig(src.library),
   }
 }
 
@@ -205,11 +239,11 @@ export function isHealthRealBypass(headers = {}) {
   return v === '1' || v === 'true' || v === 'yes'
 }
 
-function headerUa(headers = {}) {
+export function headerUa(headers = {}) {
   return String(headers['user-agent'] || headers['User-Agent'] || '')
 }
 
-function blockText(block) {
+export function blockText(block) {
   if (block == null) return ''
   if (typeof block === 'string') return block
   if (typeof block !== 'object') return ''
@@ -219,7 +253,7 @@ function blockText(block) {
   return ''
 }
 
-function systemText(system) {
+export function systemText(system) {
   if (system == null) return ''
   if (typeof system === 'string') return system.trim()
   if (Array.isArray(system)) return system.map(blockText).join('').trim()
@@ -261,7 +295,7 @@ export function inboundMaxTokens(body = {}) {
   return Number.isFinite(n) && n > 0 ? n : 0
 }
 
-function normalizeProbeText(text) {
+export function normalizeProbeText(text) {
   return String(text || '')
     .trim()
     .toLowerCase()
@@ -806,6 +840,7 @@ export function createHealthProbeMonitor(opts = {}) {
 
   const setConfig = (next, { restart = true } = {}) => {
     config = normalizeHealthProbeConfig(next)
+    opts.probeLibrary?.setConfig?.(config)
     if (restart) start({ immediate: false })
     return config
   }
@@ -816,6 +851,7 @@ export function createHealthProbeMonitor(opts = {}) {
     getSnapshot,
     getSnapshots: () => ({ anthropic: getSnapshot('anthropic'), openai: getSnapshot('openai') }),
     rawSnapshot: (platform = 'anthropic') => snapshots[platform] || null,
+    probeLibrary: opts.probeLibrary || null,
     decide,
     runRealProbe,
     start,
