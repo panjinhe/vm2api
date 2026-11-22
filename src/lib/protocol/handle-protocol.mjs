@@ -1558,12 +1558,13 @@ export function createHandleProtocol(deps) {
     const detectedClient = detectThirdPartyClient(ctx.body)
     const thirdPartyClient =
       detectedClient && thirdPartyActionFor(detectedClient, getRouting()) === 'relocate' ? detectedClient : null
+    const foreignBlock = officialTraffic === true && hasForeignSystemBlock(ctx.body.system)
     if (
       !apiOpenAI &&
       inferenceBackend !== 'api' &&
       !requestContext &&
       (
-        (!officialPassthrough && (!officialTraffic || hasForeignSystemBlock(ctx.body.system))) ||
+        (!officialPassthrough && (!officialTraffic || foreignBlock)) ||
         thirdPartyClient
       ) &&
       thirdPartyRelocateEnabled(getRouting())
@@ -1572,8 +1573,9 @@ export function createHandleProtocol(deps) {
       // foreign block, so move just that block: the real official envelope has
       // standalone harness/boundary/guidance blocks that the greedy predicate
       // would strip along with it. A known third-party client posing as
-      // official is relocated greedily and name-scrubbed instead.
-      const onlyForeign = officialTraffic === true && !thirdPartyClient
+      // official is name-scrubbed, and relocated greedily only when its prompt
+      // is merged into an official block and cannot be split off.
+      const onlyForeign = officialTraffic === true && (!thirdPartyClient || foreignBlock)
       const relocated = relocateThirdPartySystem(ctx.body, { onlyForeign, client: thirdPartyClient })
       if (relocated.moved) {
         // A CRAG hop sends cragSystem (the caller system without its <cwd>

@@ -355,7 +355,6 @@ const identity = { type: 'text', text: CRS_OFFICIAL_CLI_SYSTEM }
 for (const [name, texts, relocated] of [
   ['a separate OpenClaw block', [DRIFTED_AGENT, OPENCLAW_SYSTEM], true],
   ['an official prompt with a new section', [DRIFTED_AGENT], false],
-  ['a suffix combined with the official prompt', [`${CRS_OFFICIAL_AGENT_PROMPT}\n\n${OPENCLAW_SYSTEM}`], false],
 ]) {
   test(`handleProtocol with official CLI headers: ${name}`, async (t) => {
     // Zero preserves non-billing system blocks without bypassing the relocation gate.
@@ -387,12 +386,30 @@ for (const [name, texts, relocated] of [
     // Persona rendering still replaces the billing block.
     assert.match(outbound.system[0].text, /^x-anthropic-billing-header:/)
     assert.deepEqual(outbound.system.slice(1), relocated ? [identity] : body.system.slice(1))
+    // deploy: the relocated OpenClaw block is also name-scrubbed (third-party-clients).
     const expectedContent = relocated
-      ? [{ type: 'text', text: OPENCLAW_SYSTEM }, ...body.messages[0].content]
+      ? [{ type: 'text', text: OPENCLAW_SYSTEM.replaceAll('OpenClaw', 'the agent') }, ...body.messages[0].content]
       : body.messages[0].content
-    assert.deepEqual(outbound.messages, [{ role: 'user', content: expectedContent }])
+    if (relocated) assert.doesNotMatch(outbound.messages[0].content[0].text, /OpenClaw/)
+    else assert.deepEqual(outbound.messages, [{ role: 'user', content: expectedContent }])
   })
 }
+
+// deploy: a known client merged into the official prompt cannot be split, so it moves whole (prod 1.4.168 behaviour).
+test('handleProtocol with official CLI headers: OpenClaw merged into the official prompt moves whole', async (t) => {
+  const routing = { compatibility: { persona_preset: 'zero', detect_proxied_official_cc: false } }
+  const dir = mkdtempSync(join(tmpdir(), 'cc-system-relocation-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const routingConfigPath = join(dir, 'routing.json')
+  writeFileSync(routingConfigPath, JSON.stringify(routing))
+  const merged = { type: 'text', text: `${CRS_OFFICIAL_AGENT_PROMPT}\n\n${OPENCLAW_SYSTEM}` }
+  const body = { ...OFFICIAL_BODY, system: [sdkBilling, identity, merged], messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] }
+  let outbound
+  const result = await runProtocol({ routing, routingConfigPath, body, headers: CLI_HEADERS, apiKeyKind: 'master', onRun: ({ canonicalBody }) => { outbound = canonicalBody } })
+  assert.equal(result.reached, true)
+  assert.ok(!outbound.system.some((b) => /OpenClaw/.test(b.text || '')))
+  assert.equal(outbound.messages[0].content.length, 2)
+})
 
 test('switch on: master-key pinned panel diagnostics are not inbound clients', async () => {
   const result = await runProtocol({
