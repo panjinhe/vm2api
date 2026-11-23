@@ -745,7 +745,10 @@ export class FailoverRunner {
     // Before queueing behind the session's hung turn: a refused retry must cost nothing.
     const quarantined = args.pinVmId ? null : this.poisonGuard.check(sessionKey, args.canonicalBody)
     if (quarantined) return quarantinedResult(quarantined)
-    if (!sessionKey) return this.runOnce(args)
+    // A batch member key is a placement group, not a conversation: its requests
+    // are independent sessionless calls, so they run side by side up to the
+    // member's concurrency instead of queueing behind each other.
+    if (!sessionKey || isBatchMemberKey(sessionKey)) return this.runOnce(args)
     const previous = this.sessionTails.get(sessionKey) || Promise.resolve()
     let releaseTurn
     const turn = new Promise((resolve) => {
