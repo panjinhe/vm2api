@@ -2017,6 +2017,7 @@ test('batch member requests sharing a sticky key run concurrently, not serialize
     canonicalBody: { model: 'claude-opus-test' },
     model: 'claude-opus-test',
     stickyKey: memberKey,
+    batchMember: true,
     callAttempt: () => {
       entered()
       return new Promise((resolve) => {
@@ -2030,6 +2031,7 @@ test('batch member requests sharing a sticky key run concurrently, not serialize
     canonicalBody: { model: 'claude-opus-test' },
     model: 'claude-opus-test',
     stickyKey: memberKey,
+    batchMember: true,
     callAttempt: () => success(),
   })
   assert.equal(second.ok, true)
