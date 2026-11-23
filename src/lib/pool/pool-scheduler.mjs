@@ -56,6 +56,7 @@ import { activeHoursOf, evaluateActiveHours } from './active-hours.mjs'
 import { vmNodeDataPath } from '../cluster/placement.mjs'
 import { GATE_DIAL_TIMEOUT_MS } from '../cluster/direct-link.mjs'
 import { ErrorCode } from '../core/errors.mjs'
+import { KernelLeaseStats, kernelCapacityOf, leaseVerdict, normalizeKernelLeaseMode } from './kernel-lease.mjs'
 import { HOST_PRESSURE_CRITICAL, HOST_PRESSURE_OK, hostMemoryLevelForVm } from '../cluster/host-memory-pressure.mjs'
 
 const WAIT_TIMEOUT_MIN_MS = 1000
@@ -156,6 +157,8 @@ export function normalizePoolRouting(pool = {}) {
   // Auto schedule level from the weekly reset (closer reset = higher level).
   // On by default; off flattens every auto-level slot so load spreads evenly.
   next.reset_priority = next.reset_priority !== false
+  // Kernel slot lease (kernel-lease.mjs): off | observe | enforce. Off by default.
+  next.kernel_lease = normalizeKernelLeaseMode(next.kernel_lease)
   next.queue_max = clampNumber(next.queue_max, DEFAULT_POOL_ROUTING.queue_max, QUEUE_MAX_MIN, QUEUE_MAX_MAX)
   next.seat_grace_ms = clampNumber(next.seat_grace_ms, DEFAULT_POOL_ROUTING.seat_grace_ms, 0, SEAT_GRACE_MAX_MS)
   next.seat_budget_reserve_pct = clampNumber(
@@ -558,6 +561,7 @@ export class PoolScheduler extends EventEmitter {
     this.inflightFamily = new Map()
     /** vmId → live reservations; mirrors `inflight` (per account) for the panel. */
     this.vmInflight = new Map()
+    this.kernelLeaseStats = new KernelLeaseStats()
     this.waiters = new Map()
     this.waiterSequence = 0
     this.dueWaiterRefreshes = new Set()
@@ -725,12 +729,15 @@ export class PoolScheduler extends EventEmitter {
         sticky: selected.selectionReason === 'sticky',
         allowWait,
       }),
-      slotWaitDeadlineMs: this.slotWaitDeadlineMs({
-        startedAt,
-        loopDeadline: Math.min(loopDeadline, queuedDeadline),
-        sticky: selected.selectionReason === 'sticky',
-        allowWait,
-      }),
+      slotWaitDeadlineMs: this.kernelLeaseWaitDeadline(
+        reservation,
+        this.slotWaitDeadlineMs({
+          startedAt,
+          loopDeadline: Math.min(loopDeadline, queuedDeadline),
+          sticky: selected.selectionReason === 'sticky',
+          allowWait,
+        }),
+      ),
     })
     for (;;) {
       if (signal?.aborted) throw makeAbortError()
@@ -901,7 +908,7 @@ export class PoolScheduler extends EventEmitter {
               !blocked.has(candidate.vmId),
           )
           const available = pinned ? woken : filterByHostMemory(woken, boundBefore?.vmId || '')
-          for (let remaining = available; remaining.length; ) {
+          for (let remaining = available; remaining.length;) {
             const next = this.pick(remaining, {
               stickyKey,
               eligible: Object.assign(
@@ -1026,6 +1033,7 @@ export class PoolScheduler extends EventEmitter {
             ? Math.min(failoverDeadline, phaseDeadline)
             : this.slotWaitDeadlineMs({ startedAt, loopDeadline: failoverDeadline, sticky, allowWait }),
       }
+      result.slotWaitDeadlineMs = this.kernelLeaseWaitDeadline(granted.reservation, result.slotWaitDeadlineMs)
       consumed = true
       return result
     }
@@ -1305,7 +1313,7 @@ export class PoolScheduler extends EventEmitter {
     if (!current && !this.planner.canOpen(candidate.vmId, candidate.seatCap, candidate.headroom)) return null
     // A machine out of memory opens no seat for a new conversation (queued grants included).
     if (!current && selectionReason !== 'sticky' && candidate.hostPressure === HOST_PRESSURE_CRITICAL) return null
-    const reservation = this.reserve(candidate)
+    const reservation = this.reserve(candidate, { selectionReason })
     if (!reservation) return null
     let seat
     try {
@@ -2533,12 +2541,14 @@ export class PoolScheduler extends EventEmitter {
   }
 
   /** Synchronous request permit; affinity seats and transport workers never own the counters. */
-  reserve(candidate, { skipQuota = false, pinned = false } = {}) {
+  reserve(candidate, { skipQuota = false, pinned = false, selectionReason = null } = {}) {
     const { accountId, vmId } = candidate
     const snapshot = candidate.exec ? this.admissionSnapshot(candidate, { pinned }) : {}
     if (!snapshot) return null
     const requestInflight = this.inflight.get(candidate.accountId) || 0
     if (!candidate.maxConcurrency || requestInflight >= candidate.maxConcurrency) return null
+    const lease = this.kernelLeaseCheck(candidate)
+    if (lease?.deny) return null
     const family = isFableModel(candidate.model) ? FABLE_FAMILY_KEY : null
     const fableCap = Number(this.config.fable_max_per_account)
     if (
@@ -2573,11 +2583,19 @@ export class PoolScheduler extends EventEmitter {
     this.inflight.set(accountId, (this.inflight.get(accountId) || 0) + 1)
     this.bumpFamily(accountId, family, 1)
     this.bumpVmInflight(vmId, 1)
+    if (lease)
+      this.kernelLeaseStats.noteGrant({
+        ...lease,
+        selectionReason: selectionReason || candidate.selectionReason || null,
+      })
     let released = false
     return {
       reserved: true,
       slotIndex: null,
       quotaToken: quotaReservation?.token,
+      kernelLease: lease
+        ? { verdict: lease.verdict, capacity: lease.capacity, inflight: lease.inflight, mode: lease.mode }
+        : null,
       release: (releaseSeat) => {
         if (released) return
         released = true
@@ -2593,6 +2611,45 @@ export class PoolScheduler extends EventEmitter {
         this.notifyCapacity(accountId)
       },
     }
+  }
+
+  /**
+   * Kernel slot lease ledger check for one more request on candidate's VM
+   * (see kernel-lease.mjs). null when the lease is off.
+   */
+  kernelLeaseCheck(candidate) {
+    const mode = this.config.kernel_lease
+    if (!mode || mode === 'off' || candidate.external) return null
+    const vmId = String(candidate.vmId || '')
+    const health = this.healthCache.get(vmId)?.value || candidate.workerStatus
+    const capacity = kernelCapacityOf(health)
+    const inflight = this.vmInflight.get(vmId) || 0
+    const verdict = leaseVerdict({ capacity, inflight })
+    const deny = mode === 'enforce' && verdict === 'over'
+    if (deny) this.kernelLeaseStats.bump('denied', vmId)
+    return { mode, vmId, capacity, inflight, verdict, deny }
+  }
+
+  /** The kernel answered slot_busy for a reservation; counts ledger desyncs. */
+  noteKernelSlotBusy(selected) {
+    const lease = selected?.kernelLease
+    if (!lease) return
+    this.kernelLeaseStats.noteSlotBusy({ ...lease, vmId: selected.vmId })
+  }
+
+  /**
+   * enforce: the ledger holds a free slot for this request, so the kernel
+   * must not queue it (gateway_policy.queue_wait_ms = 0). A kernel that is
+   * full anyway is a desync and answers at once instead of eating the budget.
+   */
+  kernelLeaseWaitDeadline(reservation, deadline) {
+    const lease = reservation?.kernelLease
+    if (lease?.mode === 'enforce' && lease.verdict === 'ok') return Date.now()
+    return deadline
+  }
+
+  kernelLeaseSnapshot() {
+    return { mode: this.config.kernel_lease || 'off', ...this.kernelLeaseStats.snapshot() }
   }
 
   /** Live request count per VM for the panel seat stream; every change pushes a frame. */
