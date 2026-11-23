@@ -229,7 +229,10 @@ test('kernel_lease enforce: refuses a VM at runnable_capacity and frees on relea
   const a = await pool.selectAndReserve(only1)
   assert.equal(a.ok, true)
   assert.equal(a.kernelLease.verdict, 'ok')
-  assert.ok(a.slotWaitDeadlineMs <= Date.now(), 'kernel must not queue a leased request (queue_wait_ms=0)')
+  assert.ok(
+    a.slotWaitDeadlineMs <= Date.now() + 5000,
+    'a leased request only waits the grace in the kernel (kernel_lease_queue_grace_ms)',
+  )
   const b = await pool.selectAndReserve(only1)
   assert.equal(b.ok, false)
   assert.equal(pool.kernelLeaseSnapshot().total.denied >= 1, true)
@@ -308,4 +311,59 @@ test('normalizePoolRouting keeps kernel_lease', async () => {
   const { normalizePoolRouting } = await import('../../src/lib/pool/pool-scheduler.mjs')
   assert.equal(normalizePoolRouting({ kernel_lease: 'observe' }).kernel_lease, 'observe')
   assert.equal(normalizePoolRouting({}).kernel_lease, 'off')
+})
+
+test('kernel_lease enforce: kernel_lease_queue_grace_ms 0 means the kernel must not queue', async (t) => {
+  const root = project()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const pool = scheduler(root, {
+    workerHealth: health(1),
+    config: { kernel_lease: 'enforce', kernel_lease_queue_grace_ms: 0 },
+  })
+  pool.kernelLeaseStats = new KernelLeaseStats({ log: () => {} })
+  const a = await pool.selectAndReserve(only1)
+  assert.ok(a.slotWaitDeadlineMs <= Date.now())
+  a.release()
+})
+
+test('kernel_lease enforce: a content seat takes a lease per request and spreads over free kernels', async (t) => {
+  const root = project()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const pool = leasePool(root, 'enforce', 1)
+  const req = { model: 'claude-test', seatKey: 'seat:h:0123456789abcdef', allowWait: false }
+  const a = await pool.selectAndReserve(req)
+  const b = await pool.selectAndReserve(req)
+  assert.equal(a.ok, true)
+  assert.equal(b.ok, true, 'second request of the batch is not stuck behind the first kernel')
+  assert.notEqual(a.vmId, b.vmId)
+  a.release()
+  b.release()
+  const c = await pool.selectAndReserve(req)
+  assert.equal(c.vmId, b.vmId, 'affinity prefers the VM the seat last ran on')
+  c.release()
+})
+
+test('kernel_lease enforce: a session seat stays on its VM', async (t) => {
+  const root = project()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const pool = leasePool(root, 'enforce', 1)
+  const req = { model: 'claude-test', seatKey: 'seat:sess:abc', allowWait: false }
+  const a = await pool.selectAndReserve(req)
+  assert.equal(a.ok, true)
+  const b = await pool.selectAndReserve(req)
+  assert.equal(b.ok, false, 'a conversation does not spill to another account for a lease')
+  a.release()
+})
+
+test('kernel_lease observe: a content seat keeps the seat path', async (t) => {
+  const root = project()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const pool = leasePool(root, 'observe', 1)
+  const req = { model: 'claude-test', seatKey: 'seat:h:0123456789abcdef', allowWait: false }
+  const a = await pool.selectAndReserve(req)
+  const b = await pool.selectAndReserve(req)
+  assert.equal(a.vmId, b.vmId)
+  assert.equal(b.selectionReason, 'seat-held')
+  a.release()
+  b.release()
 })

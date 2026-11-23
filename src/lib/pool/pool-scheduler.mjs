@@ -69,6 +69,13 @@ export const SEAT_BUDGET_RESERVE_MAX = 0.5
 export const CIRCUIT_THRESHOLD_MAX = 20
 export const CIRCUIT_OPEN_MIN_MS = 1000
 
+const CONTENT_AFFINITY_MAX = 5000
+
+/** Seat keys derived from request content (cache text / fingerprint / batch member), not a client session. */
+function isContentSeatKey(seatKey) {
+  return /^seat:(h|bg):/.test(String(seatKey || ''))
+}
+
 /** A queued request re-reads eligibility this often, so cooldown lifts and new slots reach it. */
 const QUEUE_REFRESH_MS = 2000
 
@@ -95,6 +102,8 @@ export const DEFAULT_POOL_ROUTING = Object.freeze({
    * the provider. 0 disables the guard (upstream behaviour).
    */
   fresh_account_isolation_ms: 0,
+  /** kernel_lease enforce: kernel queue wait for a leased request (see kernelLeaseWaitDeadline). */
+  kernel_lease_queue_grace_ms: 5000,
 })
 
 const DEFAULT_CONFIG = {
@@ -159,6 +168,12 @@ export function normalizePoolRouting(pool = {}) {
   next.reset_priority = next.reset_priority !== false
   // Kernel slot lease (kernel-lease.mjs): off | observe | enforce. Off by default.
   next.kernel_lease = normalizeKernelLeaseMode(next.kernel_lease)
+  next.kernel_lease_queue_grace_ms = clampNumber(
+    next.kernel_lease_queue_grace_ms,
+    DEFAULT_POOL_ROUTING.kernel_lease_queue_grace_ms,
+    0,
+    WAIT_TIMEOUT_MAX_MS,
+  )
   next.queue_max = clampNumber(next.queue_max, DEFAULT_POOL_ROUTING.queue_max, QUEUE_MAX_MIN, QUEUE_MAX_MAX)
   next.seat_grace_ms = clampNumber(next.seat_grace_ms, DEFAULT_POOL_ROUTING.seat_grace_ms, 0, SEAT_GRACE_MAX_MS)
   next.seat_budget_reserve_pct = clampNumber(
@@ -562,6 +577,8 @@ export class PoolScheduler extends EventEmitter {
     /** vmId → live reservations; mirrors `inflight` (per account) for the panel. */
     this.vmInflight = new Map()
     this.kernelLeaseStats = new KernelLeaseStats()
+    // kernel_lease enforce: content-derived seat key -> VM it last ran on (ranking only).
+    this.contentAffinity = new Map()
     this.waiters = new Map()
     this.waiterSequence = 0
     this.dueWaiterRefreshes = new Set()
@@ -661,9 +678,30 @@ export class PoolScheduler extends EventEmitter {
   async selectAndReserve(args = {}) {
     const pinned = !!String(args.pinVmId || '').trim()
     if (args.seatKey && !pinned && !args.skipSessionSlot) {
-      return this.selectSeat({ ...args, seatKey: scopedSeatKey(args.seatKey, args.ownerScope) })
+      const seatKey = scopedSeatKey(args.seatKey, args.ownerScope)
+      // kernel_lease enforce: a seat derived from request content (no client
+      // session) is affinity, not a conversation. Each request takes its own
+      // kernel lease, preferring the VM the seat last ran on, so one batch
+      // cannot queue on a full kernel while other kernels sit idle.
+      if (this.config.kernel_lease === 'enforce' && isContentSeatKey(args.seatKey)) {
+        return this.selectContentSeat(args, seatKey)
+      }
+      return this.selectSeat({ ...args, seatKey })
     }
     return this.selectDirect(args)
+  }
+
+  async selectContentSeat(args, seatKey) {
+    const home = this.planner.seatOf(seatKey)?.vmId || this.contentAffinity.get(seatKey) || null
+    const selected = await this.selectDirect({ ...args, deviceVmId: home || args.deviceVmId || null })
+    if (selected?.ok && selected.vmId) {
+      this.contentAffinity.delete(seatKey)
+      this.contentAffinity.set(seatKey, selected.vmId)
+      if (this.contentAffinity.size > CONTENT_AFFINITY_MAX) {
+        this.contentAffinity.delete(this.contentAffinity.keys().next().value)
+      }
+    }
+    return selected
   }
 
   async selectDirect({
@@ -2639,13 +2677,17 @@ export class PoolScheduler extends EventEmitter {
 
   /**
    * enforce: the ledger holds a free slot for this request, so the kernel
-   * must not queue it (gateway_policy.queue_wait_ms = 0). A kernel that is
-   * full anyway is a desync and answers at once instead of eating the budget.
+   * queue wait (gateway_policy.queue_wait_ms) only has to cover a slot that is
+   * still being released (a native process exiting after the previous
+   * request): kernel_lease_queue_grace_ms, not the whole sticky wait. A kernel
+   * still full after that is a desync and answers instead of eating the budget.
+   * 0 means do not queue at all.
    */
   kernelLeaseWaitDeadline(reservation, deadline) {
     const lease = reservation?.kernelLease
-    if (lease?.mode === 'enforce' && lease.verdict === 'ok') return Date.now()
-    return deadline
+    if (lease?.mode !== 'enforce' || lease.verdict !== 'ok') return deadline
+    const graceEnd = Date.now() + this.config.kernel_lease_queue_grace_ms
+    return Number.isFinite(deadline) ? Math.min(deadline, graceEnd) : graceEnd
   }
 
   kernelLeaseSnapshot() {
