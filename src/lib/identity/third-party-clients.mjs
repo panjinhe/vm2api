@@ -78,13 +78,10 @@ export const THIRD_PARTY_CLIENTS = Object.freeze([
   }),
 ])
 
+// Only the Anthropic `system` field: on the OpenAI-shaped path a system/developer
+// turn is caller-written conversation content (upstream e6d74ea1, #1570).
 function systemTexts(body) {
-  const texts = [...eachSystemText(body?.system)]
-  for (const message of Array.isArray(body?.messages) ? body.messages : []) {
-    if (message?.role !== 'system' && message?.role !== 'developer') continue
-    texts.push(...eachSystemText(message.content))
-  }
-  return texts
+  return [...eachSystemText(body?.system)]
 }
 
 function toolNames(body) {
