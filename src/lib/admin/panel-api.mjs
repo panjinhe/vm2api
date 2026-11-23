@@ -7,7 +7,6 @@
  */
 
 import { isBlockableClientId } from '../identity/blocked-clients.mjs'
-import { THIRD_PARTY_ACTIONS, isThirdPartyClientId } from '../identity/third-party-clients.mjs'
 import { hostMemoryPressureOf, LOCAL_HOST_KEY } from '../cluster/host-memory-pressure.mjs'
 import { THINKING_DISPLAY_MODES } from '../protocol/thinking.mjs'
 import { normalizeRedaction } from '../redaction/policy.mjs'
@@ -552,16 +551,6 @@ export function validatePersonaRoutingPatch(body = {}) {
         // recoverable only by hand-editing that file.
         if (!isBlockableClientId(id)) continue
         if (typeof on !== 'boolean') problems.push(`blocked_clients.${id} 必须是布尔`)
-      }
-    }
-  }
-  if (compat.third_party_clients != null) {
-    const map = compat.third_party_clients
-    if (typeof map !== 'object' || Array.isArray(map)) problems.push('third_party_clients 必须是对象')
-    else {
-      for (const [id, action] of Object.entries(map)) {
-        if (!isThirdPartyClientId(id)) problems.push(`third_party_clients.${id} 不是已知客户端`)
-        else if (!THIRD_PARTY_ACTIONS.includes(action)) problems.push(`third_party_clients.${id} 必须是 off / relocate / block`)
       }
     }
   }
