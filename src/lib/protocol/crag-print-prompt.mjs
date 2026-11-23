@@ -423,9 +423,79 @@ function foldSummarySystemTurns(messages) {
   return { messages: [...folded.messages, ...tail], outputConfig }
 }
 
+const UNCACHEABLE_TAIL = new Set(['thinking', 'redacted_thinking'])
+
+function cacheTtlRank(cacheControl) {
+  return cacheControl?.ttl === '1h' ? 2 : 1
+}
+
+function cacheableTail(content) {
+  for (let j = content.length - 1; j >= 0; j--) {
+    const block = content[j]
+    if (!block || typeof block !== 'object' || UNCACHEABLE_TAIL.has(block.type)) continue
+    if (block.type === 'text' && !String(block.text || '').trim()) continue
+    return j
+  }
+  return -1
+}
+
+/**
+ * Third-party clients put cache_control on arbitrary history blocks. Around
+ * kernel-native assistant turns some of those layouts make CRAG refuse the
+ * request before dispatch (CRAG_CACHE_CONTROL "Caller cache anchor changed in
+ * native history"). Reduce message markers to the official Claude Code shape:
+ * keep the leading `systemBlocks` blocks of the first user message (the system
+ * prompt the gateway relocated there) and one marker on the last cacheable
+ * block of the last message; drop the rest. Tools and system are left alone.
+ * Does nothing when no marker would be dropped.
+ */
+export function normalizeCallerCacheAnchors(body, { systemBlocks = 0 } = {}) {
+  const messages = body?.messages
+  const none = { body, dropped: 0 }
+  if (!Array.isArray(messages) || !messages.length) return none
+  const lastIndex = messages.length - 1
+  const firstUser = messages.findIndex((message) => message?.role === 'user')
+  const last = messages[lastIndex]
+  const tailAt = Array.isArray(last?.content) ? cacheableTail(last.content) : -1
+  let dropped = 0
+  let candidate = null
+  let earlierRank = 2
+  for (const tool of Array.isArray(body.tools) ? body.tools : [])
+    if (tool?.cache_control) earlierRank = Math.min(earlierRank, cacheTtlRank(tool.cache_control))
+  for (const block of Array.isArray(body.system) ? body.system : [])
+    if (block?.cache_control) earlierRank = Math.min(earlierRank, cacheTtlRank(block.cache_control))
+  const next = messages.map((message, i) => {
+    if (!Array.isArray(message?.content)) return message
+    let changed = false
+    const content = message.content.map((block, j) => {
+      if (!block || typeof block !== 'object' || block.cache_control == null) return block
+      if (i === firstUser && j < systemBlocks && !(i === lastIndex && j === tailAt)) {
+        earlierRank = Math.min(earlierRank, cacheTtlRank(block.cache_control))
+        return block
+      }
+      if (i === lastIndex && j === tailAt) return block
+      candidate = block.cache_control
+      dropped++
+      changed = true
+      const { cache_control: _drop, ...rest } = block
+      return rest
+    })
+    return changed ? { ...message, content } : message
+  })
+  if (!dropped) return none
+  if (tailAt >= 0 && next[lastIndex].content[tailAt].cache_control == null) {
+    const marker = { type: candidate?.type || 'ephemeral' }
+    if (candidate?.ttl && (candidate.ttl !== '1h' || earlierRank === 2)) marker.ttl = candidate.ttl
+    const content = next[lastIndex].content.slice()
+    content[tailAt] = { ...content[tailAt], cache_control: marker }
+    next[lastIndex] = { ...next[lastIndex], content }
+  }
+  return { body: { ...body, messages: next }, dropped }
+}
+
 /**
  * @param {object} body caller body, before cli-node persona injection
- * @param {{ preset?: 'official_full' | 'zero', officialPassthrough?: boolean, capabilities?: string[], agentSummary?: boolean, foldSystemMessages?: boolean }} [options]
+ * @param {{ preset?: 'official_full' | 'zero', officialPassthrough?: boolean, capabilities?: string[], agentSummary?: boolean, foldSystemMessages?: boolean, normalizeCacheAnchors?: boolean, relocatedSystemBlocks?: number, onCacheAnchors?: (info: { dropped: number }) => void }} [options]
  */
 export function prepareCragPrintBody(
   body,
@@ -435,16 +505,26 @@ export function prepareCragPrintBody(
     capabilities,
     agentSummary = false,
     foldSystemMessages = true,
+    normalizeCacheAnchors = false,
+    relocatedSystemBlocks = 0,
+    onCacheAnchors,
   } = {},
 ) {
   // The CRAG kernel reads block markers only and 400s on a top-level
   // cache_control. Convert it here, before any early return, so every path out
   // of this function hands the kernel the standard shape.
-  const out = materializeAutomaticCache({ ...(body || {}) })
+  let out = materializeAutomaticCache({ ...(body || {}) })
   if (out.safeguards !== undefined) {
     const sg = sanitizeSafeguardsForCrag(out.safeguards, capabilities)
     if (sg.value === undefined) delete out.safeguards
     else out.safeguards = sg.value
+  }
+  if (normalizeCacheAnchors) {
+    const normalized = normalizeCallerCacheAnchors(out, { systemBlocks: relocatedSystemBlocks })
+    if (normalized.dropped) {
+      out = normalized.body
+      onCacheAnchors?.({ dropped: normalized.dropped })
+    }
   }
   const nativeV3 = Array.isArray(capabilities) && capabilities.includes('generation_controls_v3')
   if (nativeV3 && Array.isArray(out.messages)) {
