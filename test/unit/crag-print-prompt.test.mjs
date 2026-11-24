@@ -9,7 +9,6 @@ import {
   callerSystemTail,
   cragV2KernelActive,
   foldHistorySystemMessages,
-  normalizeCallerCacheAnchors,
   prepareCragPrintBody,
   projectCallerSystem,
   readSlotKernelConfig,
@@ -705,94 +704,3 @@ test('automatic caching still converts at the four-breakpoint budget', () => {
   assert.equal('cache_control' in out, false)
   assert.deepEqual(out.messages[0].content[0].cache_control, mark)
 })
-
-{
-  const CC = { type: 'ephemeral' }
-  // The 2026-11-23 WorkBuddy layout CRAG refused with "Caller cache anchor changed in native history".
-  const blocked = () => ({
-    tools: [{ name: 'Read' }, { name: 'ToolSearch', cache_control: CC }],
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: 'relocated system', cache_control: CC },
-          { type: 'text', text: 'compact summary', cache_control: CC },
-        ],
-      },
-      {
-        role: 'assistant',
-        content: [
-          { type: 'text', text: 'checking', cache_control: CC },
-          { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} },
-        ],
-      },
-      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
-    ],
-  })
-  const marks = (body) =>
-    body.messages.flatMap((m, i) => m.content.flatMap((b, j) => (b.cache_control ? [`${i}.${j}`] : [])))
-
-  test('normalizeCallerCacheAnchors: keeps the first block and moves the rest to the last block', () => {
-    const { body, dropped } = normalizeCallerCacheAnchors(blocked(), { systemBlocks: 1 })
-    assert.equal(dropped, 2)
-    assert.deepEqual(marks(body), ['0.0', '2.0'])
-    assert.deepEqual(body.messages[2].content[0].cache_control, { type: 'ephemeral' })
-    assert.deepEqual(body.tools[1].cache_control, CC)
-  })
-
-  test('normalizeCallerCacheAnchors: is a no-op for the official shape', () => {
-    const input = blocked()
-    input.messages[0].content[1] = { type: 'text', text: 'summary' }
-    input.messages[1].content[0] = { type: 'text', text: 'checking' }
-    input.messages[2].content[0].cache_control = CC
-    const out = normalizeCallerCacheAnchors(input, { systemBlocks: 1 })
-    assert.equal(out.dropped, 0)
-    assert.equal(out.body, input)
-  })
-
-  test('normalizeCallerCacheAnchors: skips thinking for the tail and never puts 1h after a 5m marker', () => {
-    const input = {
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: 'a', cache_control: CC },
-            { type: 'text', text: 'b' },
-          ],
-        },
-        { role: 'assistant', content: [{ type: 'text', text: 'c', cache_control: { type: 'ephemeral', ttl: '1h' } }] },
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: 'd' },
-            { type: 'text', text: '  ' },
-          ],
-        },
-      ],
-    }
-    const { body } = normalizeCallerCacheAnchors(input, { systemBlocks: 1 })
-    assert.deepEqual(marks(body), ['0.0', '2.0'])
-    assert.deepEqual(body.messages[2].content[0].cache_control, { type: 'ephemeral' })
-  })
-
-  test('normalizeCallerCacheAnchors: runs inside prepareCragPrintBody only when asked', () => {
-    let seen = null
-    const on = prepareCragPrintBody(blocked(), {
-      normalizeCacheAnchors: true,
-      relocatedSystemBlocks: 1,
-      onCacheAnchors: (i) => (seen = i),
-    })
-    assert.deepEqual(marks(on), ['0.0', '2.0'])
-    assert.deepEqual(seen, { dropped: 2 })
-    assert.deepEqual(marks(prepareCragPrintBody(blocked())), ['0.0', '0.1', '1.0'])
-  })
-
-  test('normalizeCallerCacheAnchors: keeps every relocated system block and nothing else up front', () => {
-    const input = blocked()
-    input.messages[0].content.unshift({ type: 'text', text: 'policy beta', cache_control: CC })
-    const kept = normalizeCallerCacheAnchors(input, { systemBlocks: 2 })
-    assert.deepEqual(marks(kept.body), ['0.0', '0.1', '2.0'])
-    const none = normalizeCallerCacheAnchors(blocked())
-    assert.deepEqual(marks(none.body), ['2.0'])
-  })
-}

@@ -1716,7 +1716,6 @@ export function createHandleProtocol(deps) {
     // Anthropic 400s a subscription request whose system field carries a third-party
     // agent prompt; the same text in the first user message is accepted.
     let cragRelocated = null
-    let relocatedSystemBlocks = 0
     if (
       !apiNonAnthropic &&
       inferenceBackend !== 'api' &&
@@ -1734,15 +1733,11 @@ export function createHandleProtocol(deps) {
         // A CRAG hop sends cragSystem (the caller system without its <cwd>
         // declaration) instead of personaIn.system. Relocate that projection
         // too, or the hop would put the third-party prompt back into system.
-        relocatedSystemBlocks = relocated.blocks
-        if (hasCragSystem) {
-          const cragMoved = relocateThirdPartySystem(
+        if (hasCragSystem)
+          cragRelocated = relocateThirdPartySystem(
             { ...ctx.body, system: cragSystem },
             { onlyForeign: officialTraffic === true },
-          )
-          cragRelocated = cragMoved.body
-          relocatedSystemBlocks = cragMoved.moved ? cragMoved.blocks : 0
-        }
+          ).body
         ctx.body = relocated.body
       }
     }
@@ -2241,14 +2236,6 @@ export function createHandleProtocol(deps) {
                 capabilities: Array.isArray(caps) ? caps : [],
                 agentSummary: !!summarySession,
                 foldSystemMessages: routingNow?.compatibility?.crag_fold_history_system !== false,
-                // routing.compatibility.crag_normalize_cache_anchors (default on): third-party
-                // cache_control layouts around native history trip CRAG_CACHE_CONTROL.
-                normalizeCacheAnchors:
-                  officialTraffic !== true && routingNow?.compatibility?.crag_normalize_cache_anchors !== false,
-                relocatedSystemBlocks,
-                onCacheAnchors: ({ dropped }) => {
-                  logBag.hop_meta = { ...logBag.hop_meta, cache_anchor_norm: { dropped } }
-                },
               })
               const materialized = await materializeRemoteImageSources(hopBody)
               if (materialized !== hopBody) {
